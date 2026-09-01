@@ -20,9 +20,6 @@ jobs:
           - os: ubuntu-24.04-arm
             target: linux-arm64
             artifact: resonate-linux-arm64
-          - os: macos-13
-            target: darwin-x64
-            artifact: resonate-darwin-x64
           - os: macos-latest
             target: darwin-arm64
             artifact: resonate-darwin-arm64
