@@ -97,7 +97,25 @@ export class LyricPlayer extends EventEmitter {
   }
 
   public async play(): Promise<void> {
-    if (this.status === 'playing' || !this.song) return;
+    if (!this.song) return;
+    if (this.status === 'playing') return;
+
+    if (this.status === 'paused') {
+      this.status = 'playing';
+      this.lastHighResTimestamp = performance.now();
+      this.lastBackendSyncAt = this.lastHighResTimestamp;
+      this.backend.resume();
+      if (!this.timerHandle) {
+        const intervalMs = Math.floor(1000 / this.targetFps);
+        this.timerHandle = setInterval(() => this.onTick(), intervalMs);
+      }
+      this.emitStateChange();
+      return;
+    }
+
+    if (this.status === 'ended') {
+      this.currentTimeMs = 0;
+    }
 
     const playTarget = this.playableTarget();
     this.status = 'playing';

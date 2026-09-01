@@ -232,15 +232,70 @@ export function isStreamRef(input: string): boolean {
   return /^[a-zA-Z0-9_-]{11}$/.test(t);
 }
 
+const streamCache = new Map<string, { url: string; expiresAt: number }>();
+const inflightStreams = new Map<string, Promise<string>>();
+
+function streamCacheKey(input: string): string {
+  const id = extractVideoId(input);
+  return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : input.trim();
+}
+
+function expiryFromStreamUrl(url: string): number {
+  try {
+    const parsed = new URL(url);
+    const expire = parsed.searchParams.get('expire');
+    if (expire) {
+      const sec = parseInt(expire, 10);
+      if (sec > 1e9) return sec * 1000 - 30_000;
+    }
+  } catch {
+    // default TTL
+  }
+  return Date.now() + 5 * 60 * 1000;
+}
+
+function cachedStreamUrl(input: string): string | undefined {
+  const hit = streamCache.get(streamCacheKey(input));
+  if (hit && hit.expiresAt > Date.now()) return hit.url;
+  return undefined;
+}
+
+function rememberStreamUrl(input: string, url: string): void {
+  streamCache.set(streamCacheKey(input), { url, expiresAt: expiryFromStreamUrl(url) });
+}
+
+export function prefetchAudioStream(videoIdOrUrl: string): void {
+  if (!isStreamRef(videoIdOrUrl)) return;
+  if (cachedStreamUrl(videoIdOrUrl)) return;
+  void resolveAudioStreamUrl(videoIdOrUrl).catch(() => {});
+}
+
 export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<string> {
   const trimmed = videoIdOrUrl.trim();
   if (trimmed.startsWith('/') || trimmed.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(trimmed)) {
     return trimmed;
   }
 
-  const videoId = extractVideoId(videoIdOrUrl);
+  const cached = cachedStreamUrl(trimmed);
+  if (cached) return cached;
+
+  const key = streamCacheKey(trimmed);
+  const pending = inflightStreams.get(key);
+  if (pending) return pending;
+
+  const work = resolveAudioStreamUrlFresh(trimmed);
+  inflightStreams.set(key, work);
+  try {
+    return await work;
+  } finally {
+    inflightStreams.delete(key);
+  }
+}
+
+async function resolveAudioStreamUrlFresh(trimmed: string): Promise<string> {
+  const videoId = extractVideoId(trimmed);
   const isId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
-  const targetUrl = isId ? `https://music.youtube.com/watch?v=${videoId}` : videoIdOrUrl;
+  const targetUrl = isId ? `https://music.youtube.com/watch?v=${videoId}` : trimmed;
 
   const ytDlpPath = findExecutable('yt-dlp');
   const cookiesFile = getCookiesFilePath();
@@ -253,7 +308,10 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
     try {
       const { stdout } = await execFileAsync(ytDlpPath, args, { timeout: 20000 });
       const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
-      if (url) return url;
+      if (url) {
+        rememberStreamUrl(trimmed, url);
+        return url;
+      }
     } catch {
       if (cookiesOk) {
         try {
@@ -263,7 +321,10 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
             { timeout: 20000 }
           );
           const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
-          if (url) return url;
+          if (url) {
+            rememberStreamUrl(trimmed, url);
+            return url;
+          }
         } catch {
           // Innertube fallback below
         }
@@ -277,13 +338,16 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
       const info = await yt.getInfo(videoId);
       const fmt: unknown = info.chooseFormat({ type: 'audio', quality: 'best' });
       const url = audioFormatUrl(fmt, yt.session.player);
-      if (url) return url;
+      if (url) {
+        rememberStreamUrl(trimmed, url);
+        return url;
+      }
     } catch {
       // fall through
     }
   }
 
-  throw new Error(`Failed to resolve audio stream for ${videoIdOrUrl}`);
+  throw new Error(`Failed to resolve audio stream for ${trimmed}`);
 }
 
 export async function ensurePlayableSong(song: Song): Promise<Song> {

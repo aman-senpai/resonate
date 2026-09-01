@@ -18,7 +18,7 @@ import {
   renderSearchModal,
 } from './ui/components/Modals.js';
 import { fetchSongDetails, searchLyrics } from './services/lyricsApi.js';
-import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, searchYtMusic } from './services/ytmusic.js';
+import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, isStreamRef, prefetchAudioStream, searchYtMusic } from './services/ytmusic.js';
 import { getAlbumArtAnsi } from './services/albumArt.js';
 import { loadAuthCredentials } from './services/auth.js';
 import { formatMsToTime } from './parser/lrc.js';
@@ -422,8 +422,11 @@ export class LyricalApp {
     }
 
     await ensurePlayableSong(song);
+    const playTarget = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
+    if (isStreamRef(playTarget)) prefetchAudioStream(playTarget);
     await this.player.loadSong(song, true);
     this.fetchArtForSong(song);
+    this.prefetchUpcoming();
 
     const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
       ? song.id
@@ -444,6 +447,7 @@ export class LyricalApp {
             }).then((s) => {
               if (s && !this.queue.some((q) => q.id === s.id)) {
                 this.queue.push(s);
+                this.prefetchUpcoming();
               }
             }).catch(() => {});
           }
@@ -474,6 +478,15 @@ export class LyricalApp {
     } else {
       this.player.seek(0);
     }
+  }
+
+  private prefetchUpcoming(): void {
+    const next = this.queue[this.currentQueueIndex + 1];
+    if (!next) return;
+    void ensurePlayableSong(next).then((song) => {
+      const target = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
+      if (isStreamRef(target)) prefetchAudioStream(target);
+    });
   }
 
   private async fetchArtForSong(song: Song): Promise<void> {

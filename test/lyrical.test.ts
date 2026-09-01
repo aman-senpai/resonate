@@ -604,7 +604,19 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
     player.seekDelta(-30000);
     assert.strictEqual(player.getState().status, 'playing');
     assert.strictEqual(player.getState().currentTimeMs, 35000);
+    player.stop();
+  });
 
+  it('should resume from pause without leaving playing state', async () => {
+    const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
+    await player.play();
+    player.pause();
+    assert.strictEqual(player.getState().status, 'paused');
+    await player.play();
+    assert.strictEqual(player.getState().status, 'playing');
+    player.setVolume(40);
+    assert.strictEqual(player.getState().status, 'playing');
+    assert.strictEqual(player.getState().volume, 40);
     player.stop();
   });
 

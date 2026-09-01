@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import { findExecutable } from '../services/auth.js';
 import { isStreamRef, resolveAudioStreamUrl } from '../services/ytmusic.js';
 
@@ -44,6 +44,58 @@ function detectPlayer(): PlayerSpec | null {
 function volumeFilter(vol: number): string {
   const linear = Math.max(0, Math.min(1.5, vol / 100));
   return `volume=${linear.toFixed(3)}`;
+}
+
+function pulseInputIndexForPid(raw: unknown, pid: number): string | null {
+  if (!Array.isArray(raw)) return null;
+  const pidStr = String(pid);
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    if (!('index' in item) || !('properties' in item)) continue;
+    const index = item.index;
+    const properties = item.properties;
+    if (typeof index !== 'number' && typeof index !== 'string') continue;
+    if (!properties || typeof properties !== 'object') continue;
+    if (!('application.process.id' in properties)) continue;
+    const procId = properties['application.process.id'];
+    if (procId === pidStr || procId === pid) return String(index);
+  }
+  return null;
+}
+
+function setPulseVolume(pid: number, vol: number): boolean {
+  const pactl = findExecutable('pactl');
+  if (!pactl || !pid) return false;
+  const pct = `${Math.max(0, Math.min(150, Math.round(vol)))}%`;
+
+  const jsonRun = spawnSync(pactl, ['--format=json', 'list', 'sink-inputs'], {
+    encoding: 'utf8',
+    timeout: 2000,
+  });
+  if (jsonRun.status === 0 && jsonRun.stdout.trim().startsWith('[')) {
+    try {
+      const index = pulseInputIndexForPid(JSON.parse(jsonRun.stdout), pid);
+      if (index) {
+        spawnSync(pactl, ['set-sink-input-volume', index, pct], { timeout: 2000 });
+        return true;
+      }
+    } catch {
+      // fall through to text parse
+    }
+  }
+
+  const textRun = spawnSync(pactl, ['list', 'sink-inputs'], { encoding: 'utf8', timeout: 2000 });
+  if (textRun.status !== 0 || !textRun.stdout) return false;
+  const blocks = textRun.stdout.split(/Sink Input #/);
+  const needle = `application.process.id = "${pid}"`;
+  for (const block of blocks) {
+    if (!block.includes(needle)) continue;
+    const id = parseInt(block, 10);
+    if (!Number.isFinite(id)) continue;
+    spawnSync(pactl, ['set-sink-input-volume', String(id), pct], { timeout: 2000 });
+    return true;
+  }
+  return false;
 }
 
 export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend {
@@ -133,6 +185,8 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private spec: PlayerSpec | null;
   private spawnGeneration: number = 0;
   private retrying: boolean = false;
+  private frozen: boolean = false;
+  private volumeTimers: NodeJS.Timeout[] = [];
 
   constructor() {
     super();
@@ -222,6 +276,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     await new Promise<void>((resolve, reject) => {
       const p = spawn(this.spec!.bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
       this.proc = p;
+      this.frozen = false;
 
       const onError = (err: Error) => {
         if (generation !== this.spawnGeneration) return;
@@ -238,6 +293,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         p.on('close', (code) => {
           void this.onProcClose(code, sessionId, generation);
         });
+        this.scheduleVolumeApply();
         resolve();
       });
     });
@@ -248,6 +304,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (sessionId !== this.playSessionId) return;
     if (this.status !== 'playing') return;
     if (this.proc) this.proc = null;
+    this.frozen = false;
 
     if (code === 0) {
       this.status = 'ended';
@@ -293,6 +350,15 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (this.status !== 'playing') return;
     this.status = 'paused';
     this.stopClock();
+    if (this.proc && this.proc.pid) {
+      try {
+        process.kill(this.proc.pid, 'SIGSTOP');
+        this.frozen = true;
+        return;
+      } catch {
+        this.frozen = false;
+      }
+    }
     this.playSessionId++;
     this.killProc();
   }
@@ -301,6 +367,18 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (this.status !== 'paused') return;
     this.status = 'playing';
     this.lastTime = Date.now();
+
+    if (this.frozen && this.proc && this.proc.pid) {
+      try {
+        process.kill(this.proc.pid, 'SIGCONT');
+        this.frozen = false;
+        this.startClock();
+        return;
+      } catch {
+        this.frozen = false;
+      }
+    }
+
     const sessionId = ++this.playSessionId;
     if (this.currentStreamUrl && this.spec) {
       void this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId).catch(async () => {
@@ -324,6 +402,15 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   public seek(targetMs: number): void {
     this.currentMs = Math.max(0, targetMs);
     this.lastTime = Date.now();
+
+    if (this.status === 'paused') {
+      if (this.frozen) {
+        this.killProc();
+        this.frozen = false;
+      }
+      return;
+    }
+
     if (this.status !== 'playing') return;
 
     const sessionId = ++this.playSessionId;
@@ -351,8 +438,10 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
 
   public setVolume(vol: number): void {
     this.currentVolume = Math.max(0, Math.min(150, vol));
-    if (this.status === 'playing' && this.currentStreamUrl && this.spec) {
-      this.seek(this.currentMs);
+    if (this.proc && this.proc.pid) {
+      if (!setPulseVolume(this.proc.pid, this.currentVolume)) {
+        this.scheduleVolumeApply();
+      }
     }
   }
 
@@ -360,7 +449,9 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     this.playSessionId++;
     this.status = 'stopped';
     this.currentMs = 0;
+    this.frozen = false;
     this.stopClock();
+    this.clearVolumeTimers();
     this.killProc();
   }
 
@@ -377,8 +468,27 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     return 'ffmpeg/Pulse';
   }
 
+  private clearVolumeTimers(): void {
+    for (const t of this.volumeTimers) clearTimeout(t);
+    this.volumeTimers = [];
+  }
+
+  private scheduleVolumeApply(): void {
+    this.clearVolumeTimers();
+    const pid = this.proc?.pid;
+    if (!pid) return;
+    for (const delay of [80, 200, 500]) {
+      this.volumeTimers.push(setTimeout(() => {
+        if (this.proc?.pid === pid) {
+          setPulseVolume(pid, this.currentVolume);
+        }
+      }, delay));
+    }
+  }
+
   private killProc(): void {
     this.spawnGeneration++;
+    this.frozen = false;
     if (!this.proc) return;
     const p = this.proc;
     this.proc = null;
