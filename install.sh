@@ -2,11 +2,11 @@
 set -e
 
 # ==============================================================================
-# Lyrical Universal 1-Line Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/aman-senpai/lyrical/main/install.sh | bash
+# Resonate Universal 1-Line Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/aman-senpai/resonate/master/install.sh | bash
 # ==============================================================================
 
-REPO="aman-senpai/lyrical"
+REPO="aman-senpai/resonate"
 INSTALL_DIR="${LYRICAL_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_NAME="lyrical"
 
