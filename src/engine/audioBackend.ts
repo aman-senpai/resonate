@@ -1,7 +1,8 @@
 import { EventEmitter } from 'events';
 import { ChildProcess, spawn, spawnSync } from 'child_process';
 import { findExecutable } from '../services/auth.js';
-import { isStreamRef, resolveAudioStreamUrl } from '../services/ytmusic.js';
+import { extractVideoId, isStreamRef, resolveAudioStreamUrl } from '../services/ytmusic.js';
+import { getCachedMediaPath } from '../services/mediaCache.js';
 
 export interface AudioBackendEvents {
   status: (state: { status: 'playing' | 'paused' | 'stopped' | 'ended'; currentMs: number; volume: number; spectrum?: number[] }) => void;
@@ -212,6 +213,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private retrying: boolean = false;
   private frozen: boolean = false;
   private volumeTimers: NodeJS.Timeout[] = [];
+  private cacheWatch: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
@@ -246,6 +248,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       await this.spawnPlayer(streamUrl, this.currentMs, sessionId);
       if (sessionId !== this.playSessionId) return;
       this.startClock();
+      this.startCacheWatch();
     } catch (err: unknown) {
       if (sessionId !== this.playSessionId) return;
       this.status = 'paused';
@@ -439,12 +442,17 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (this.status !== 'playing') return;
 
     const sessionId = ++this.playSessionId;
-    if (!this.spec || !this.currentStreamUrl) {
+    const id = extractVideoId(this.currentTarget);
+    const local = /^[a-zA-Z0-9_-]{11}$/.test(id) ? getCachedMediaPath(id) : undefined;
+    if (local) this.currentStreamUrl = local;
+    const source = this.currentStreamUrl;
+
+    if (!this.spec || !source) {
       this.startClock();
       return;
     }
 
-    void this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId).catch(async () => {
+    void this.spawnPlayer(source, this.currentMs, sessionId).catch(async () => {
       if (sessionId !== this.playSessionId) return;
       if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
       try {
@@ -475,6 +483,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     this.frozen = false;
     this.stopClock();
     this.clearVolumeTimers();
+    this.stopCacheWatch();
     this.killProc();
   }
 
@@ -502,6 +511,31 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       this.volumeTimers.push(setTimeout(() => {
         setPulseVolume(this.proc?.pid ?? null, this.currentVolume);
       }, delay));
+    }
+  }
+
+  private startCacheWatch(): void {
+    this.stopCacheWatch();
+    const id = extractVideoId(this.currentTarget);
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(id)) return;
+    const ready = getCachedMediaPath(id);
+    if (ready) {
+      this.currentStreamUrl = ready;
+      return;
+    }
+    this.cacheWatch = setInterval(() => {
+      const file = getCachedMediaPath(id);
+      if (file) {
+        this.currentStreamUrl = file;
+        this.stopCacheWatch();
+      }
+    }, 800);
+  }
+
+  private stopCacheWatch(): void {
+    if (this.cacheWatch) {
+      clearInterval(this.cacheWatch);
+      this.cacheWatch = null;
     }
   }
 

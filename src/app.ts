@@ -426,7 +426,7 @@ export class LyricalApp {
     if (isStreamRef(playTarget)) prefetchAudioStream(playTarget);
     await this.player.loadSong(song, true);
     this.fetchArtForSong(song);
-    this.prefetchUpcoming();
+    this.prefetchNeighbors();
 
     const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
       ? song.id
@@ -447,7 +447,7 @@ export class LyricalApp {
             }).then((s) => {
               if (s && !this.queue.some((q) => q.id === s.id)) {
                 this.queue.push(s);
-                this.prefetchUpcoming();
+                this.prefetchNeighbors();
               }
             }).catch(() => {});
           }
@@ -480,11 +480,12 @@ export class LyricalApp {
     }
   }
 
-  private prefetchUpcoming(): void {
-    for (let offset = 1; offset <= 3; offset++) {
-      const next = this.queue[this.currentQueueIndex + offset];
-      if (!next) continue;
-      void ensurePlayableSong(next).then((song) => {
+  private prefetchNeighbors(): void {
+    for (const offset of [-1, 1, 2, 3]) {
+      const idx = this.currentQueueIndex + offset;
+      if (idx < 0 || idx >= this.queue.length) continue;
+      const item = this.queue[idx];
+      void ensurePlayableSong(item).then((song) => {
         const target = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
         if (isStreamRef(target)) prefetchAudioStream(target);
       });

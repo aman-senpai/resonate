@@ -54,6 +54,10 @@ export async function runCli(args: string[]): Promise<void> {
 
   const command = positional[0]?.toLowerCase();
 
+  if (command === 'help') {
+    printHelp();
+    return;
+  }
   // Subcommand: auth
   if (command === 'auth') {
     await handleAuthCommand(positional.slice(1), flags);
@@ -168,7 +172,8 @@ export async function runCli(args: string[]): Promise<void> {
   launchInteractiveApp(flags, {
     initialSong: targetSong,
     autoPlay: true,
-    startView: targetSong ? 'karaoke' : 'search',
+    startView: targetSong ? 'karaoke' : (queryArg ? 'search' : 'search'),
+    initialSearchQuery: targetSong ? undefined : queryArg || undefined,
   });
 }
 
@@ -540,11 +545,11 @@ function printHelp(): void {
 ${ANSI.BOLD}${gradientText('  RESONATE - YouTube Music Terminal Player & Lyrics CLI  ', [[255, 0, 51], [255, 100, 100], [255, 215, 0]], true)}${ANSI.RESET}
 
 ${ANSI.BOLD}USAGE:${ANSI.RESET}
-  resonate [command] [options] [query]
+  resonate "We Don't Talk Anymore"
+  resonate play "<query|url>"
 
 ${ANSI.BOLD}COMMANDS:${ANSI.RESET}
-  ${colorText('resonate', [255, 215, 0])}                          Launch TUI player (opens live search)
-  ${colorText('resonate play <query|url|id>', [255, 215, 0])}     Search & immediately play a song or video URL
+  ${colorText('resonate "We Don\'t Talk Anymore"', [255, 215, 0])}  Search and play immediately
   ${colorText('resonate search [query]', [255, 215, 0])}          Open TUI search with dropdown suggestions
   ${colorText('resonate playlist [list|show|play]', [255, 215, 0])} Browse playlists (TUI if no subcommand)
   ${colorText('resonate library', [255, 215, 0])}                 Open library / Liked Songs TUI

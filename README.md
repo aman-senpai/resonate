@@ -16,15 +16,18 @@ The script installs `resonate`, `yt-dlp`, and an audio engine (`ffplay` / `mpv` 
 
 ```bash
 resonate
-resonate play "We Don't Talk Anymore"
+resonate "We Don't Talk Anymore"
 ```
+
+Quote the title when it contains apostrophes (`don't`). Same thing: `resonate play "We Don't Talk Anymore"`.
 
 ## Commands
 
 | | |
 | :--- | :--- |
 | `resonate` | Open the player |
-| `resonate play <query\|url>` | Search and play |
+| `resonate "<song>"` | Search and play |
+| `resonate play <query\|url>` | Same as a quoted title |
 | `resonate search [query]` | Search |
 | `resonate library` | Liked songs |
 | `resonate charts` | Trending |
