@@ -2,7 +2,7 @@
 
 Terminal YouTube Music player. Synced lyrics, visualizers, album art.
 
-![Resonate demo](assets/demo.mp4)
+![Resonate demo](assets/demo.gif)
 
 ## Install
 
