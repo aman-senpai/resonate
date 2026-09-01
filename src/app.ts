@@ -18,7 +18,7 @@ import {
   renderSearchModal,
 } from './ui/components/Modals.js';
 import { fetchSongDetails, searchLyrics } from './services/lyricsApi.js';
-import { getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, searchYtMusic } from './services/ytmusic.js';
+import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, searchYtMusic } from './services/ytmusic.js';
 import { getAlbumArtAnsi } from './services/albumArt.js';
 import { loadAuthCredentials } from './services/auth.js';
 import { formatMsToTime } from './parser/lrc.js';
@@ -109,6 +109,10 @@ export class LyricalApp {
     }
 
     this.loadInitialSuggestions();
+
+    if (opts.autoPlay && opts.initialSong && opts.initialSong.id) {
+      void this.playSong(opts.initialSong);
+    }
 
     if (opts.initialSearchQuery) {
       this.searchQuery = opts.initialSearchQuery;
@@ -408,7 +412,6 @@ export class LyricalApp {
   }
 
   public async playSong(song: Song): Promise<void> {
-    // Add to queue if not present
     const existingIdx = this.queue.findIndex((s) => s.id === song.id);
     if (existingIdx !== -1) {
       this.currentQueueIndex = existingIdx;
@@ -418,12 +421,15 @@ export class LyricalApp {
       this.currentQueueIndex = this.queue.length - 1;
     }
 
+    await ensurePlayableSong(song);
     await this.player.loadSong(song, true);
     this.fetchArtForSong(song);
 
-    // Prefetch related tracks for seamless queue
-    if (song.source === 'youtube') {
-      getYtUpNext(song.id).then((related) => {
+    const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
+      ? song.id
+      : (song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl) ? song.audioUrl : '');
+    if (ytId) {
+      getYtUpNext(ytId).then((related) => {
         for (const item of related.slice(0, 5)) {
           const isAlreadyInQueue = this.queue.some((q) => q.id === item.id);
           if (!isAlreadyInQueue) {

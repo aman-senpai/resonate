@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SearchResult, YtExploreCategory, YtPlaylist, YtTrack } from '../types.js';
+import { SearchResult, Song, YtExploreCategory, YtPlaylist, YtTrack } from '../types.js';
 import { findExecutable, getCookiesFilePath, loadAuthCredentials, saveAuthCredentials } from './auth.js';
 
 const execFileAsync = promisify(execFile);
@@ -210,44 +210,102 @@ function parseDurationText(text: string): number {
   return 0;
 }
 
-/**
- * Resolves direct audio stream URL with high bitrate (yt-dlp or Innertube)
- */
+function audioFormatUrl(fmt: unknown, player: unknown): string | undefined {
+  if (!fmt || typeof fmt !== 'object') return undefined;
+  if ('decipher' in fmt && typeof fmt.decipher === 'function') {
+    const decoded = fmt.decipher(player);
+    if (typeof decoded === 'string' && (decoded.startsWith('http://') || decoded.startsWith('https://'))) {
+      return decoded;
+    }
+  }
+  if ('url' in fmt && typeof fmt.url === 'string' && (fmt.url.startsWith('http://') || fmt.url.startsWith('https://'))) {
+    return fmt.url;
+  }
+  return undefined;
+}
+
+export function isStreamRef(input: string): boolean {
+  if (!input) return false;
+  const t = input.trim();
+  if (t.startsWith('http://') || t.startsWith('https://') || t.startsWith('file://')) return true;
+  if (t.startsWith('/') || /^[A-Za-z]:[\\/]/.test(t)) return true;
+  return /^[a-zA-Z0-9_-]{11}$/.test(t);
+}
+
 export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<string> {
-  const videoId = extractVideoId(videoIdOrUrl);
-  const targetUrl = videoId ? `https://music.youtube.com/watch?v=${videoId}` : videoIdOrUrl;
-
-  const ytDlpPath = findExecutable('yt-dlp') || path.join(os.homedir(), '.local', 'bin', 'yt-dlp');
-  const cookiesFile = getCookiesFilePath();
-
-  const args: string[] = ['-g', '-f', 'bestaudio/best', '--no-playlist', '--no-warnings'];
-
-  if (fs.existsSync(cookiesFile)) {
-    args.push('--cookies', cookiesFile);
+  const trimmed = videoIdOrUrl.trim();
+  if (trimmed.startsWith('/') || trimmed.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return trimmed;
   }
 
-  args.push(targetUrl);
+  const videoId = extractVideoId(videoIdOrUrl);
+  const isId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+  const targetUrl = isId ? `https://music.youtube.com/watch?v=${videoId}` : videoIdOrUrl;
 
-  try {
-    const { stdout } = await execFileAsync(ytDlpPath, args, { timeout: 15000 });
-    const url = stdout.trim().split('\n')[0];
-    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-      return url;
-    }
-  } catch (err: any) {
-    // Retry without cookies if cookies caused failure
+  const ytDlpPath = findExecutable('yt-dlp');
+  const cookiesFile = getCookiesFilePath();
+  const cookiesOk = fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80;
+
+  if (ytDlpPath) {
+    const args = ['-g', '-f', 'bestaudio/best', '--no-playlist', '--no-warnings'];
+    if (cookiesOk) args.push('--cookies', cookiesFile);
+    args.push(targetUrl);
     try {
-      const { stdout } = await execFileAsync(ytDlpPath, ['-g', '-f', 'bestaudio/best', '--no-playlist', targetUrl], { timeout: 15000 });
-      const url = stdout.trim().split('\n')[0];
-      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-        return url;
-      }
+      const { stdout } = await execFileAsync(ytDlpPath, args, { timeout: 20000 });
+      const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
+      if (url) return url;
     } catch {
-      // Fallback
+      if (cookiesOk) {
+        try {
+          const { stdout } = await execFileAsync(
+            ytDlpPath,
+            ['-g', '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', targetUrl],
+            { timeout: 20000 }
+          );
+          const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
+          if (url) return url;
+        } catch {
+          // Innertube fallback below
+        }
+      }
+    }
+  }
+
+  if (isId) {
+    try {
+      const yt = await getYtMusicClient();
+      const info = await yt.getInfo(videoId);
+      const fmt: unknown = info.chooseFormat({ type: 'audio', quality: 'best' });
+      const url = audioFormatUrl(fmt, yt.session.player);
+      if (url) return url;
+    } catch {
+      // fall through
     }
   }
 
   throw new Error(`Failed to resolve audio stream for ${videoIdOrUrl}`);
+}
+
+export async function ensurePlayableSong(song: Song): Promise<Song> {
+  if (song.audioUrl && isStreamRef(song.audioUrl)) return song;
+  if (/^[a-zA-Z0-9_-]{11}$/.test((song.id || '').trim())) {
+    song.source = song.source || 'youtube';
+    return song;
+  }
+  const query = `${song.title || ''} ${song.artist || ''}`.trim();
+  if (!query) return song;
+  try {
+    const results = await searchYtMusic(query, 'song');
+    const hit = results.find((r) => typeof r.id === 'string' && /^[a-zA-Z0-9_-]{11}$/.test(r.id));
+    if (hit && typeof hit.id === 'string') {
+      song.audioUrl = hit.id;
+      song.source = song.source || 'youtube';
+      if (!song.thumbnailUrl && hit.thumbnailUrl) song.thumbnailUrl = hit.thumbnailUrl;
+    }
+  } catch {
+    // lyrics-only playback remains available
+  }
+  return song;
 }
 
 export function extractVideoId(input: string): string {

@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { parseLrc, parseTimestampToMs, formatMsToTime, createSongFromText } from '../src/parser/lrc.js';
 import { LyricPlayer } from '../src/engine/player.js';
-import { createAudioBackend, FfplayAudioBackend, SimulatedAudioBackend } from '../src/engine/audioBackend.js';
+import { createAudioBackend, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
 import { AudioVisualizer } from '../src/engine/visualizer.js';
 import { THEMES, ThemeManager } from '../src/ui/themes.js';
 import { getVisualWidth, truncate, pad, gradientText, drawBox, stripAnsi, sliceVisualEnd } from '../src/ui/renderer.js';
@@ -20,7 +20,7 @@ import {
   renderSearchModal,
 } from '../src/ui/components/Modals.js';
 import { LyricalApp } from '../src/app.js';
-import { extractPlaylistId, extractThumbnailUrl, extractVideoId } from '../src/services/ytmusic.js';
+import { extractPlaylistId, extractThumbnailUrl, extractVideoId, isStreamRef } from '../src/services/ytmusic.js';
 import { clearAuthCredentials, loadAuthCredentials, saveAuthCredentials } from '../src/services/auth.js';
 
 const globalSong = createSongFromText(
@@ -589,7 +589,7 @@ describe('Interactive Keypress & Search Handling', () => {
 
 describe('Seek, Album Art & Musical Note UX Fixes', () => {
   it('should maintain playing status when seeking during active playback', async () => {
-    const player = new LyricPlayer(globalSong);
+    const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
     await player.play();
     assert.strictEqual(player.getState().status, 'playing');
 
@@ -674,19 +674,23 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
     assert.strictEqual(formatMusicalNoteText({ id: 100, text: '(Instrumental)', startMs: 0, endMs: 1000, isInstrumental: true }), '♪   ♪   ♪');
   });
 
-  it('should instantiate appropriate audio backend and support ffplay lifecycle', () => {
+  it('should instantiate system audio backend without spawning playback', () => {
     const backend = createAudioBackend();
     assert.ok(backend !== null);
     assert.ok(backend.getName().length > 0);
 
-    const ffplayBackend = new FfplayAudioBackend();
-    assert.strictEqual(ffplayBackend.getName(), 'FFplay Native Audio Engine');
-    assert.strictEqual(ffplayBackend.status, 'stopped');
-    ffplayBackend.setVolume(75);
-    assert.strictEqual(ffplayBackend.currentVolume, 75);
-    ffplayBackend.seek(12000);
-    assert.strictEqual(ffplayBackend.currentMs, 12000);
-    ffplayBackend.stop();
-    ffplayBackend.destroy();
+    const system = new SystemAudioBackend();
+    assert.ok(system.getName().length > 0);
+    assert.strictEqual(system.status, 'stopped');
+    system.setVolume(75);
+    assert.strictEqual(system.currentVolume, 75);
+    system.seek(12000);
+    assert.strictEqual(system.currentMs, 12000);
+    system.stop();
+    system.destroy();
+
+    assert.strictEqual(isStreamRef('dQw4w9WgXcQ'), true);
+    assert.strictEqual(isStreamRef('queen-bohemian-rhapsody'), false);
+    assert.strictEqual(isStreamRef('https://music.youtube.com/watch?v=dQw4w9WgXcQ'), true);
   });
 });

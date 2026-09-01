@@ -118,19 +118,28 @@ export async function importCookiesFromBrowser(browser: string = 'chrome'): Prom
 }
 
 export function findExecutable(name: string): string | null {
-  const envPath = process.env.PATH || '';
-  const dirs = envPath.split(path.delimiter);
-  const homeBin = path.join(os.homedir(), '.local', 'bin');
-  dirs.unshift(homeBin);
+  const extra = [
+    path.join(os.homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/opt/local/bin',
+  ];
+  const envDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const dirs = [...extra, ...envDirs];
+  const seen = new Set<string>();
 
   for (const dir of dirs) {
+    if (seen.has(dir)) continue;
+    seen.add(dir);
     const full = path.join(dir, name);
     try {
-      if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-        return full;
-      }
+      const st = fs.statSync(full);
+      if (!st.isFile()) continue;
+      if (process.platform !== 'win32' && (st.mode & 0o111) === 0) continue;
+      return full;
     } catch {
-      // Continue search
+      // continue
     }
   }
   return null;

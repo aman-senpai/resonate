@@ -1,8 +1,7 @@
 import { EventEmitter } from 'events';
 import { LyricLine, PlayerState, Song } from '../types.js';
 import { createAudioBackend, IAudioBackend } from './audioBackend.js';
-import { resolveAudioStreamUrl } from '../services/ytmusic.js';
-
+import { isStreamRef } from '../services/ytmusic.js';
 export interface PlayerEvents {
   tick: (state: PlayerState) => void;
   lineChange: (index: number, line: LyricLine | null) => void;
@@ -29,6 +28,7 @@ export class LyricPlayer extends EventEmitter {
   private spectrumBands: number[] = new Array(16).fill(0);
   private timerHandle: NodeJS.Timeout | null = null;
   private lastHighResTimestamp: number = 0;
+  private lastBackendSyncAt: number = 0;
   private targetFps: number = 30;
 
   constructor(song?: Song, customBackend?: IAudioBackend) {
@@ -44,11 +44,10 @@ export class LyricPlayer extends EventEmitter {
   private setupBackendEvents(): void {
     if (this.backend instanceof EventEmitter) {
       this.backend.on('status', (state: { status: 'playing' | 'paused' | 'stopped' | 'ended'; currentMs: number; volume: number; spectrum?: number[] }) => {
-        // If we are actively playing real audio, update time and spectrum from audio engine
         if (this.status === 'playing') {
-          if (state.currentMs > 0 || this.currentTimeMs === 0) {
-            this.currentTimeMs = state.currentMs;
-          }
+          this.currentTimeMs = state.currentMs;
+          this.lastHighResTimestamp = performance.now();
+          this.lastBackendSyncAt = this.lastHighResTimestamp;
           if (state.spectrum && state.spectrum.length > 0) {
             this.spectrumBands = state.spectrum;
           }
@@ -59,7 +58,6 @@ export class LyricPlayer extends EventEmitter {
 
       this.backend.on('ended', () => {
         if (this.status === 'playing') {
-          // Guard against spurious ended events during seek or process spawn
           if (this.durationMs <= 0 || this.currentTimeMs >= Math.max(0, this.durationMs - 2500)) {
             this.onPlaybackEnded();
           }
@@ -68,6 +66,11 @@ export class LyricPlayer extends EventEmitter {
 
       this.backend.on('error', (err) => {
         this.isBuffering = false;
+        if (this.status === 'playing') {
+          this.status = 'paused';
+          clearInterval(this.timerHandle!);
+          this.timerHandle = null;
+        }
         this.emit('error', err);
       });
     }
@@ -96,21 +99,25 @@ export class LyricPlayer extends EventEmitter {
   public async play(): Promise<void> {
     if (this.status === 'playing' || !this.song) return;
 
+    const playTarget = this.playableTarget();
     this.status = 'playing';
     this.lastHighResTimestamp = performance.now();
-
-    const playTarget = this.song.id || this.song.audioUrl || 'simulated';
+    this.lastBackendSyncAt = this.lastHighResTimestamp;
 
     try {
       await this.backend.play(playTarget, this.currentTimeMs);
-    } catch {
-      // Fallback
+    } catch (err: unknown) {
+      this.status = 'paused';
+      this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      this.emitStateChange();
+      return;
     }
 
+    this.lastHighResTimestamp = performance.now();
+    this.lastBackendSyncAt = this.lastHighResTimestamp;
     clearInterval(this.timerHandle!);
     const intervalMs = Math.floor(1000 / this.targetFps);
     this.timerHandle = setInterval(() => this.onTick(), intervalMs);
-
     this.emitStateChange();
   }
 
@@ -166,6 +173,13 @@ export class LyricPlayer extends EventEmitter {
     }
     this.emit('tick', this.getState());
     this.emitStateChange();
+  }
+
+  private playableTarget(): string {
+    if (!this.song) return '';
+    if (this.song.audioUrl && isStreamRef(this.song.audioUrl)) return this.song.audioUrl;
+    if (isStreamRef(this.song.id)) return this.song.id;
+    return '';
   }
 
   public seekDelta(deltaMs: number): void {
@@ -271,9 +285,10 @@ export class LyricPlayer extends EventEmitter {
     const elapsed = (now - this.lastHighResTimestamp) * this.speed;
     this.lastHighResTimestamp = now;
 
-    // Advance clock if audio backend isn't overriding or is simulated
-    this.currentTimeMs += elapsed;
-
+    // Backend status events are the master clock. Only free-run if they stop.
+    if (now - this.lastBackendSyncAt > 250) {
+      this.currentTimeMs += elapsed;
+    }
     if (this.durationMs > 0 && this.currentTimeMs >= this.durationMs) {
       this.onPlaybackEnded();
       return;

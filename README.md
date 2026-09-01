@@ -20,24 +20,37 @@ A high-performance terminal YouTube Music player featuring real-time synchronize
 
 ## Installation
 
-### 1-Line Quick Install (Linux & macOS)
+### 1-Line Install (Linux and macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aman-senpai/resonate/master/install.sh | bash
 ```
 
-The installer detects your operating system and CPU architecture, installs the standalone binary into `~/.local/bin/resonate`, and sets up required dependencies.
+The installer is self-contained:
+
+- Detects OS and CPU architecture (Linux/macOS, x64/arm64)
+- Installs a native `yt-dlp` binary (not the Python zipapp)
+- Uses distro/Homebrew ffmpeg when passwordless sudo or brew is available
+- Otherwise installs a static `ffmpeg` on Linux (Pulse/ALSA playback, no root)
+- Writes `~/.local/bin` into `.bashrc` / `.zshrc` / `.profile` using the original PATH
+- Verifies `resonate --version`, `yt-dlp --version`, and `ffplay`/`mpv`/`ffmpeg` before reporting success
+
+If `~/.local/bin` was not already on PATH, open a new terminal or run:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ---
 
-### Prerequisites
+### Audio engines (auto-detected)
 
-| Component | Purpose | Installation |
-| :--- | :--- | :--- |
-| **`ffmpeg` / `ffplay`** | Audio playback engine | **Fedora**: `sudo dnf install ffmpeg-free`<br>**Ubuntu/Debian**: `sudo apt install ffmpeg`<br>**Arch**: `sudo pacman -S ffmpeg`<br>**macOS**: `brew install ffmpeg` |
-| **`yt-dlp`** | Stream extraction | Handled automatically by `install.sh` |
-
----
+| Engine | Role |
+| :--- | :--- |
+| `ffplay` | Preferred player (absolute path, `-ss` seek, `-volume`) |
+| `mpv` | Fallback player |
+| `ffmpeg` | Linux PulseAudio/PipeWire, then ALSA |
+| `yt-dlp` | Resolves YouTube audio URLs; Innertube is a fallback |
 
 ### Manual Install from Source
 

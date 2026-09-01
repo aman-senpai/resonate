@@ -1,12 +1,8 @@
 import { EventEmitter } from 'events';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as readline from 'readline';
-import { fileURLToPath } from 'url';
 import { ChildProcess, spawn } from 'child_process';
 import { findExecutable } from '../services/auth.js';
-import { resolveAudioStreamUrl } from '../services/ytmusic.js';
+import { isStreamRef, resolveAudioStreamUrl } from '../services/ytmusic.js';
+
 export interface AudioBackendEvents {
   status: (state: { status: 'playing' | 'paused' | 'stopped' | 'ended'; currentMs: number; volume: number; spectrum?: number[] }) => void;
   ended: () => void;
@@ -24,167 +20,32 @@ export interface IAudioBackend {
   getName(): string;
 }
 
-/**
- * Native PulseAudio Backend (using compiled Go audio engine)
- */
-export class NativeAudioBackend extends EventEmitter implements IAudioBackend {
-  private proc: ChildProcess | null = null;
-  private isReady: boolean = false;
-  public currentMs: number = 0;
-  public status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
-  public currentVolume: number = 100;
-  private binaryPath: string;
+type PlayerKind = 'ffplay' | 'mpv' | 'ffmpeg-pulse' | 'ffmpeg-alsa';
 
-  constructor(binaryPath?: string) {
-    super();
-    this.binaryPath = binaryPath || this.findAudioBinary();
-    this.initProcess();
-  }
-
-  private findAudioBinary(): string {
-    const currentFile = fileURLToPath(import.meta.url);
-    const rootDir = path.resolve(path.dirname(currentFile), '../..');
-    const localBin = path.join(rootDir, 'bin', 'lyrical-audio');
-    if (fs.existsSync(localBin)) {
-      return localBin;
-    }
-    const srcRootDir = path.resolve(path.dirname(currentFile), '../../..');
-    const srcLocalBin = path.join(srcRootDir, 'bin', 'lyrical-audio');
-    if (fs.existsSync(srcLocalBin)) {
-      return srcLocalBin;
-    }
-    const homeBin = path.join(os.homedir(), '.local', 'bin', 'lyrical-audio');
-    if (fs.existsSync(homeBin)) {
-      return homeBin;
-    }
-    return findExecutable('lyrical-audio') || localBin;
-  }
-  private initProcess(): void {
-    try {
-      this.proc = spawn(this.binaryPath, [], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      if (this.proc.stdout) {
-        const rl = readline.createInterface({ input: this.proc.stdout });
-        rl.on('line', (line) => {
-          this.handleStdoutLine(line.trim());
-        });
-      }
-
-      this.proc.on('error', (err) => {
-        this.emit('error', err);
-      });
-
-      this.proc.on('exit', () => {
-        this.isReady = false;
-      });
-    } catch (err: any) {
-      this.emit('error', err);
-    }
-  }
-
-  private handleStdoutLine(line: string): void {
-    if (!line) return;
-
-    if (line === 'READY') {
-      this.isReady = true;
-    } else if (line === 'PLAYING') {
-      this.status = 'playing';
-    } else if (line === 'PAUSED') {
-      this.status = 'paused';
-    } else if (line === 'RESUMED') {
-      this.status = 'playing';
-    } else if (line === 'STOPPED') {
-      this.status = 'stopped';
-    } else if (line === 'ENDED') {
-      this.status = 'ended';
-      this.emit('ended');
-    } else if (line.startsWith('STATUS ')) {
-      // Format: STATUS <status> <currentMs> <volume> <b0,b1,...>
-      const parts = line.split(' ');
-      if (parts.length >= 5) {
-        const st = parts[1] as 'playing' | 'paused' | 'stopped' | 'ended';
-        const ms = parseInt(parts[2], 10) || 0;
-        const vol = parseInt(parts[3], 10) || 100;
-        const rawBands = parts[4].split(',').map((b) => parseFloat(b) || 0);
-
-        this.status = st;
-        this.currentMs = ms;
-        this.currentVolume = vol;
-
-        this.emit('status', {
-          status: st,
-          currentMs: ms,
-          volume: vol,
-          spectrum: rawBands,
-        });
-      }
-    }
-  }
-
-  public async play(url: string, startMs: number = 0): Promise<void> {
-    if (!this.proc || this.proc.killed) {
-      this.initProcess();
-    }
-    this.sendCmd(`PLAY ${url} ${Math.floor(startMs)}`);
-    this.status = 'playing';
-    this.currentMs = startMs;
-  }
-
-  public pause(): void {
-    this.sendCmd('PAUSE');
-    this.status = 'paused';
-  }
-
-  public resume(): void {
-    this.sendCmd('RESUME');
-    this.status = 'playing';
-  }
-
-  public seek(targetMs: number): void {
-    this.sendCmd(`SEEK ${Math.floor(targetMs)}`);
-    this.currentMs = targetMs;
-  }
-
-  public setVolume(vol: number): void {
-    this.currentVolume = vol;
-    this.sendCmd(`VOLUME ${Math.floor(vol)}`);
-  }
-
-  public stop(): void {
-    this.sendCmd('STOP');
-    this.status = 'stopped';
-  }
-
-  public destroy(): void {
-    try {
-      this.sendCmd('QUIT');
-      if (this.proc && !this.proc.killed) {
-        this.proc.kill();
-      }
-    } catch {
-      // Ignore cleanup error
-    }
-  }
-  private sendCmd(cmd: string): void {
-    if (this.proc && this.proc.stdin && !this.proc.stdin.destroyed) {
-      this.proc.stdin.write(cmd + '\n');
-    }
-  }
-
-  public getIsReady(): boolean {
-    return this.isReady;
-  }
-
-  public getName(): string {
-    return 'Native PulseAudio';
-  }
+interface PlayerSpec {
+  kind: PlayerKind;
+  bin: string;
 }
 
-/**
- * Simulated Timer Audio Backend (fallback when no audio output device exists)
- */
+function detectPlayer(): PlayerSpec | null {
+  const ffplay = findExecutable('ffplay');
+  if (ffplay) return { kind: 'ffplay', bin: ffplay };
+
+  const mpv = findExecutable('mpv');
+  if (mpv) return { kind: 'mpv', bin: mpv };
+
+  const ffmpeg = findExecutable('ffmpeg');
+  if (ffmpeg && process.platform !== 'darwin') {
+    return { kind: 'ffmpeg-pulse', bin: ffmpeg };
+  }
+  return null;
+}
+
+function volumeFilter(vol: number): string {
+  const linear = Math.max(0, Math.min(1.5, vol / 100));
+  return `volume=${linear.toFixed(3)}`;
+}
+
 export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend {
   private timer: NodeJS.Timeout | null = null;
   private currentMs: number = 0;
@@ -193,235 +54,39 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
   private lastTime: number = 0;
 
   public async play(_url: string, startMs: number = 0): Promise<void> {
-    this.currentMs = startMs;
+    this.currentMs = Math.max(0, startMs);
     this.status = 'playing';
     this.lastTime = Date.now();
-
-    clearInterval(this.timer!);
-    this.timer = setInterval(() => this.tick(), 40);
+    this.startClock();
   }
 
   public pause(): void {
     this.status = 'paused';
-    clearInterval(this.timer!);
-    this.timer = null;
-  }
-
-  public resume(): void {
-    if (this.status === 'paused') {
-      this.status = 'playing';
-      this.lastTime = Date.now();
-      if (!this.timer) {
-        this.timer = setInterval(() => this.tick(), 40);
-      }
-    }
-  }
-
-  public seek(targetMs: number): void {
-    this.currentMs = Math.max(0, targetMs);
-    this.lastTime = Date.now();
-    if (this.status === 'playing' && !this.timer) {
-      this.timer = setInterval(() => this.tick(), 40);
-    }
-  }
-
-  public setVolume(vol: number): void {
-    this.volume = vol;
-  }
-
-  public stop(): void {
-    this.status = 'stopped';
-    clearInterval(this.timer!);
-    this.timer = null;
-  }
-
-  public destroy(): void {
-    this.stop();
-  }
-
-  public getName(): string {
-    return 'Simulated / Visualizer Only';
-  }
-
-  private tick(): void {
-    const now = Date.now();
-    const elapsed = now - this.lastTime;
-    this.lastTime = now;
-
-    if (this.status === 'playing') {
-      this.currentMs += elapsed;
-      this.emit('status', {
-        status: this.status,
-        currentMs: this.currentMs,
-        volume: this.volume,
-      });
-    }
-  }
-}
-
-/**
- * FFplay Native Audio Backend (Linux / Fedora / PipeWire / PulseAudio / ALSA / macOS / Windows)
- */
-export class FfplayAudioBackend extends EventEmitter implements IAudioBackend {
-  private proc: ChildProcess | null = null;
-  public currentMs: number = 0;
-  public status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
-  public currentVolume: number = 100;
-  private timer: NodeJS.Timeout | null = null;
-  private lastTime: number = 0;
-  private currentTarget: string = '';
-  private currentStreamUrl: string = '';
-  private isSeeking: boolean = false;
-  private playSessionId: number = 0;
-
-  constructor() {
-    super();
-  }
-
-  public async play(urlOrId: string, startMs: number = 0): Promise<void> {
-    this.stopInternal(false);
-    this.currentTarget = urlOrId;
-    this.currentMs = Math.max(0, startMs);
-    this.status = 'playing';
-    this.lastTime = Date.now();
-    const sessionId = ++this.playSessionId;
-
-    try {
-      let resolvedUrl = urlOrId;
-      if (urlOrId && (urlOrId.startsWith('http://') || urlOrId.startsWith('https://') || /^[a-zA-Z0-9_-]{11}$/.test(urlOrId.trim()))) {
-        resolvedUrl = await resolveAudioStreamUrl(urlOrId);
-      }
-      if (sessionId !== this.playSessionId) {
-        return;
-      }
-      this.currentStreamUrl = resolvedUrl;
-      this.spawnPlayer(resolvedUrl, this.currentMs, sessionId);
-      this.startClock();
-    } catch (err: unknown) {
-      if (sessionId === this.playSessionId) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
-        this.startClock();
-      }
-    }
-  }
-
-  private spawnPlayer(streamUrl: string, startMs: number, sessionId: number): void {
-    if (this.proc) {
-      try {
-        this.proc.kill('SIGKILL');
-      } catch {}
-      this.proc = null;
-    }
-
-    const args = [
-      '-nodisp',
-      '-autoexit',
-      '-loglevel', 'error',
-      '-volume', String(Math.max(0, Math.min(100, this.currentVolume))),
-    ];
-
-    if (startMs > 0) {
-      args.push('-ss', (startMs / 1000).toFixed(3));
-    }
-
-    args.push(streamUrl);
-
-    try {
-      const p = spawn('ffplay', args, {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      });
-
-      this.proc = p;
-
-      p.on('error', (err) => {
-        if (sessionId === this.playSessionId && !this.isSeeking) {
-          this.emit('error', err);
-        }
-      });
-
-      p.on('close', (code) => {
-        if (sessionId === this.playSessionId && !this.isSeeking && this.status === 'playing') {
-          if (code === 0) {
-            this.status = 'ended';
-            this.stopClock();
-            this.emit('ended');
-          }
-        }
-      });
-    } catch (err: unknown) {
-      if (sessionId === this.playSessionId) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
-      }
-    }
-  }
-
-  public pause(): void {
-    if (this.status === 'playing') {
-      this.status = 'paused';
-      this.stopClock();
-      if (this.proc && this.proc.pid) {
-        try {
-          process.kill(this.proc.pid, 'SIGSTOP');
-        } catch {}
-      }
-    }
-  }
-
-  public resume(): void {
-    if (this.status === 'paused') {
-      this.status = 'playing';
-      this.lastTime = Date.now();
-      if (this.proc && this.proc.pid) {
-        try {
-          process.kill(this.proc.pid, 'SIGCONT');
-        } catch {
-          if (this.currentStreamUrl) {
-            this.spawnPlayer(this.currentStreamUrl, this.currentMs, ++this.playSessionId);
-          }
-        }
-      } else if (this.currentStreamUrl) {
-        this.spawnPlayer(this.currentStreamUrl, this.currentMs, ++this.playSessionId);
-      }
-      this.startClock();
-    }
-  }
-
-  public seek(targetMs: number): void {
-    this.currentMs = Math.max(0, targetMs);
-    this.lastTime = Date.now();
-
-    if (this.status === 'playing') {
-      this.isSeeking = true;
-      const sessionId = ++this.playSessionId;
-      if (this.currentStreamUrl) {
-        this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId);
-      }
-      this.isSeeking = false;
-      this.startClock();
-    }
-  }
-
-  public setVolume(vol: number): void {
-    this.currentVolume = Math.max(0, Math.min(100, vol));
-  }
-
-  public stop(): void {
-    this.stopInternal(true);
-  }
-
-  private stopInternal(resetPos: boolean): void {
-    this.playSessionId++;
-    this.status = 'stopped';
     this.stopClock();
-    if (resetPos) {
-      this.currentMs = 0;
+  }
+
+  public resume(): void {
+    if (this.status === 'paused') {
+      this.status = 'playing';
+      this.lastTime = Date.now();
+      this.startClock();
     }
-    if (this.proc) {
-      try {
-        this.proc.kill('SIGKILL');
-      } catch {}
-      this.proc = null;
-    }
+  }
+
+  public seek(targetMs: number): void {
+    this.currentMs = Math.max(0, targetMs);
+    this.lastTime = Date.now();
+    if (this.status === 'playing') this.startClock();
+  }
+
+  public setVolume(vol: number): void {
+    this.volume = Math.max(0, Math.min(150, vol));
+  }
+
+  public stop(): void {
+    this.status = 'stopped';
+    this.currentMs = 0;
+    this.stopClock();
   }
 
   public destroy(): void {
@@ -430,7 +95,296 @@ export class FfplayAudioBackend extends EventEmitter implements IAudioBackend {
   }
 
   public getName(): string {
-    return 'FFplay Native Audio Engine';
+    return 'Simulated / Visualizer Only';
+  }
+
+  private startClock(): void {
+    if (this.timer) return;
+    this.lastTime = Date.now();
+    this.timer = setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - this.lastTime;
+      this.lastTime = now;
+      if (this.status === 'playing') {
+        this.currentMs += elapsed;
+        this.emit('status', { status: this.status, currentMs: this.currentMs, volume: this.volume });
+      }
+    }, 40);
+  }
+
+  private stopClock(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
+export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
+  private proc: ChildProcess | null = null;
+  public currentMs: number = 0;
+  public status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
+  public currentVolume: number = 100;
+  private timer: NodeJS.Timeout | null = null;
+  private lastTime: number = 0;
+  private currentTarget: string = '';
+  private currentStreamUrl: string = '';
+  private playSessionId: number = 0;
+  private spec: PlayerSpec | null;
+  private spawnGeneration: number = 0;
+  private retrying: boolean = false;
+
+  constructor() {
+    super();
+    this.spec = detectPlayer();
+  }
+
+  public async play(urlOrId: string, startMs: number = 0): Promise<void> {
+    this.killProc();
+    this.currentTarget = urlOrId || '';
+    this.currentMs = Math.max(0, startMs);
+    this.lastTime = Date.now();
+    const sessionId = ++this.playSessionId;
+
+    if (!this.currentTarget || this.currentTarget === 'simulated' || !isStreamRef(this.currentTarget)) {
+      this.status = 'playing';
+      this.startClock();
+      return;
+    }
+
+    if (!this.spec) {
+      this.status = 'paused';
+      const error = new Error('No audio engine (install ffmpeg or mpv)');
+      this.emit('error', error);
+      throw error;
+    }
+
+    try {
+      const streamUrl = await resolveAudioStreamUrl(this.currentTarget);
+      if (sessionId !== this.playSessionId) return;
+      this.currentStreamUrl = streamUrl;
+      this.status = 'playing';
+      await this.spawnPlayer(streamUrl, this.currentMs, sessionId);
+      if (sessionId !== this.playSessionId) return;
+      this.startClock();
+    } catch (err: unknown) {
+      if (sessionId !== this.playSessionId) return;
+      this.status = 'paused';
+      this.stopClock();
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  private playerArgs(streamUrl: string, startMs: number, kind: PlayerKind): string[] {
+    const startSec = startMs > 0 ? (startMs / 1000).toFixed(3) : '0';
+    const vol = Math.max(0, Math.min(100, this.currentVolume));
+
+    if (kind === 'ffplay') {
+      const args = ['-nodisp', '-autoexit', '-loglevel', 'error', '-volume', String(vol)];
+      if (startMs > 0) args.push('-ss', startSec);
+      args.push('-i', streamUrl);
+      return args;
+    }
+
+    if (kind === 'mpv') {
+      return [
+        '--no-video',
+        '--really-quiet',
+        '--no-terminal',
+        `--volume=${vol}`,
+        `--start=${startSec}`,
+        streamUrl,
+      ];
+    }
+
+    const outFmt = kind === 'ffmpeg-alsa' ? 'alsa' : 'pulse';
+    const args = [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-reconnect', '1',
+      '-reconnect_streamed', '1',
+      '-reconnect_delay_max', '5',
+    ];
+    if (startMs > 0) args.push('-ss', startSec);
+    args.push('-i', streamUrl, '-vn', '-af', volumeFilter(this.currentVolume), '-f', outFmt, 'default');
+    return args;
+  }
+
+  private async spawnPlayer(streamUrl: string, startMs: number, sessionId: number): Promise<void> {
+    if (!this.spec) throw new Error('No audio engine');
+    this.killProc();
+
+    const generation = ++this.spawnGeneration;
+    const args = this.playerArgs(streamUrl, startMs, this.spec.kind);
+
+    await new Promise<void>((resolve, reject) => {
+      const p = spawn(this.spec!.bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      this.proc = p;
+
+      const onError = (err: Error) => {
+        if (generation !== this.spawnGeneration) return;
+        reject(err);
+      };
+      p.once('error', onError);
+      p.once('spawn', () => {
+        p.off('error', onError);
+        p.on('error', (err) => {
+          if (sessionId === this.playSessionId && this.status === 'playing') {
+            this.emit('error', err);
+          }
+        });
+        p.on('close', (code) => {
+          void this.onProcClose(code, sessionId, generation);
+        });
+        resolve();
+      });
+    });
+  }
+
+  private async onProcClose(code: number | null, sessionId: number, generation: number): Promise<void> {
+    if (generation !== this.spawnGeneration) return;
+    if (sessionId !== this.playSessionId) return;
+    if (this.status !== 'playing') return;
+    if (this.proc) this.proc = null;
+
+    if (code === 0) {
+      this.status = 'ended';
+      this.stopClock();
+      this.emit('ended');
+      return;
+    }
+
+    if (this.retrying) {
+      this.status = 'paused';
+      this.stopClock();
+      this.emit('error', new Error('Audio playback stopped'));
+      return;
+    }
+
+    this.retrying = true;
+    try {
+      if (this.spec?.kind === 'ffmpeg-pulse') {
+        this.spec = { kind: 'ffmpeg-alsa', bin: this.spec.bin };
+        await this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId);
+        this.retrying = false;
+        return;
+      }
+
+      if (this.currentTarget && isStreamRef(this.currentTarget)) {
+        const fresh = await resolveAudioStreamUrl(this.currentTarget);
+        if (sessionId !== this.playSessionId) return;
+        this.currentStreamUrl = fresh;
+        await this.spawnPlayer(fresh, this.currentMs, sessionId);
+        this.retrying = false;
+        return;
+      }
+    } catch (err: unknown) {
+      this.status = 'paused';
+      this.stopClock();
+      this.emit('error', err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      this.retrying = false;
+    }
+  }
+
+  public pause(): void {
+    if (this.status !== 'playing') return;
+    this.status = 'paused';
+    this.stopClock();
+    this.playSessionId++;
+    this.killProc();
+  }
+
+  public resume(): void {
+    if (this.status !== 'paused') return;
+    this.status = 'playing';
+    this.lastTime = Date.now();
+    const sessionId = ++this.playSessionId;
+    if (this.currentStreamUrl && this.spec) {
+      void this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId).catch(async () => {
+        if (sessionId !== this.playSessionId) return;
+        if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
+        try {
+          const fresh = await resolveAudioStreamUrl(this.currentTarget);
+          if (sessionId !== this.playSessionId) return;
+          this.currentStreamUrl = fresh;
+          await this.spawnPlayer(fresh, this.currentMs, sessionId);
+        } catch (err: unknown) {
+          this.status = 'paused';
+          this.stopClock();
+          this.emit('error', err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    }
+    this.startClock();
+  }
+
+  public seek(targetMs: number): void {
+    this.currentMs = Math.max(0, targetMs);
+    this.lastTime = Date.now();
+    if (this.status !== 'playing') return;
+
+    const sessionId = ++this.playSessionId;
+    if (!this.spec || !this.currentStreamUrl) {
+      this.startClock();
+      return;
+    }
+
+    void this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId).catch(async () => {
+      if (sessionId !== this.playSessionId) return;
+      if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
+      try {
+        const fresh = await resolveAudioStreamUrl(this.currentTarget);
+        if (sessionId !== this.playSessionId) return;
+        this.currentStreamUrl = fresh;
+        await this.spawnPlayer(fresh, this.currentMs, sessionId);
+      } catch (err: unknown) {
+        this.status = 'paused';
+        this.stopClock();
+        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+    this.startClock();
+  }
+
+  public setVolume(vol: number): void {
+    this.currentVolume = Math.max(0, Math.min(150, vol));
+    if (this.status === 'playing' && this.currentStreamUrl && this.spec) {
+      this.seek(this.currentMs);
+    }
+  }
+
+  public stop(): void {
+    this.playSessionId++;
+    this.status = 'stopped';
+    this.currentMs = 0;
+    this.stopClock();
+    this.killProc();
+  }
+
+  public destroy(): void {
+    this.stop();
+    this.removeAllListeners();
+  }
+
+  public getName(): string {
+    if (!this.spec) return 'System Audio (unavailable)';
+    if (this.spec.kind === 'ffplay') return 'FFplay';
+    if (this.spec.kind === 'mpv') return 'mpv';
+    if (this.spec.kind === 'ffmpeg-alsa') return 'ffmpeg/ALSA';
+    return 'ffmpeg/Pulse';
+  }
+
+  private killProc(): void {
+    this.spawnGeneration++;
+    if (!this.proc) return;
+    const p = this.proc;
+    this.proc = null;
+    try {
+      p.kill('SIGKILL');
+    } catch {}
   }
 
   private startClock(): void {
@@ -459,23 +413,7 @@ export class FfplayAudioBackend extends EventEmitter implements IAudioBackend {
   }
 }
 
-/**
- * Factory to create the best available audio backend
- */
 export function createAudioBackend(): IAudioBackend {
-  const binaryPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../bin/lyrical-audio');
-  if (fs.existsSync(binaryPath) || findExecutable('lyrical-audio')) {
-    try {
-      const native = new NativeAudioBackend(fs.existsSync(binaryPath) ? binaryPath : undefined);
-      return native;
-    } catch {
-      // Fallback
-    }
-  }
-
-  if (findExecutable('ffplay') || fs.existsSync('/usr/bin/ffplay')) {
-    return new FfplayAudioBackend();
-  }
-
+  if (detectPlayer()) return new SystemAudioBackend();
   return new SimulatedAudioBackend();
 }
