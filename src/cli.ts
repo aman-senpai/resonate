@@ -578,6 +578,11 @@ ${ANSI.BOLD}PLAYER CONTROLS:${ANSI.RESET}
   ${colorText('↑ / ↓', [255, 215, 0])}       Volume up / down by 5%
   ${colorText('0 / Home', [255, 215, 0])}     Restart track from beginning (0:00)
   ${colorText('N / B', [255, 215, 0])}       Next / Previous track in queue or playlist
+  ${colorText('O', [255, 215, 0])}           Toggle loop of current track
+  ${colorText('X', [255, 215, 0])}           Toggle shuffle for upcoming queue
+  ${colorText('U', [255, 215, 0])}           Toggle mute on / off
+  ${colorText(', / .', [255, 215, 0])}       Adjust playback speed (-0.25x / +0.25x)
+  ${colorText('K', [255, 215, 0])}           Like current YouTube track
   ${colorText('/ or S', [255, 215, 0])}      Open live YouTube Music search
   ${colorText('P or L', [255, 215, 0])}      Open Playlists & Library
   ${colorText('Q', [255, 215, 0])}           Open Playback Queue & Up Next (d: delete)

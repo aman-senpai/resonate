@@ -9,14 +9,15 @@ export interface ControlBarOptions {
   visualizerType: VisualizerType;
   viewMode: string;
   showTimestamps: boolean;
+  shuffle?: boolean;
 }
 
 export function renderControlBar(opts: ControlBarOptions): string[] {
-  const { width, state, theme, visualizerType, showTimestamps } = opts;
-  const lines: string[] = [];
+  const { width, state, theme, visualizerType, showTimestamps, shuffle } = opts;
   const bFg = fg(theme.border);
   const reset = ANSI.RESET;
   const innerWidth = Math.max(10, width - 2);
+  const lines: string[] = [];
 
   // Top border
   lines.push(`${bFg}╭${'─'.repeat(innerWidth)}╮${reset}`);
@@ -58,11 +59,12 @@ export function renderControlBar(opts: ControlBarOptions): string[] {
   const offsetSign = offset >= 0 ? '+' : '';
   const offsetBadge = colorText(`SYNC: ${offsetSign}${(offset / 1000).toFixed(1)}s`, offset !== 0 ? theme.accent : theme.subtle);
   const loopBadge = state.loop ? colorText('LOOP: ON', theme.accent, true) : colorText('LOOP: OFF', theme.subtle);
+  const shuffleBadge = shuffle ? colorText('SHUF: ON', theme.accent, true) : colorText('SHUF: OFF', theme.subtle);
   const vizBadge = colorText(`VIZ: ${visualizerType.toUpperCase()}`, theme.secondary);
-  const volBadge = colorText(`VOL: ${state.volume}%`, theme.accent);
+  const volBadge = state.muted ? colorText('VOL: MUTE', theme.accent, true) : colorText(`VOL: ${state.volume}%`, theme.accent);
   const backendBadge = colorText(`AUDIO: ${state.backend || 'Native'}`, theme.dimmed);
   const timeToggleBadge = showTimestamps ? colorText('TIME: ON', theme.accent) : colorText('TIME: OFF', theme.subtle);
-  const statusItems = [speedBadge, offsetBadge, loopBadge, vizBadge, volBadge, backendBadge, timeToggleBadge];
+  const statusItems = [speedBadge, offsetBadge, loopBadge, shuffleBadge, vizBadge, volBadge, backendBadge, timeToggleBadge];
   let statusLineLeft = `  ${statusItems.join('  │  ')}`;
   if (getVisualWidth(statusLineLeft) > innerWidth) {
     statusLineLeft = `  ${statusItems.slice(0, 4).join('  ')}`;

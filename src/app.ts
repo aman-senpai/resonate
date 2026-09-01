@@ -18,7 +18,7 @@ import {
   renderSearchModal,
 } from './ui/components/Modals.js';
 import { fetchSongDetails, searchLyrics } from './services/lyricsApi.js';
-import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, isStreamRef, prefetchAudioStream, searchYtMusic } from './services/ytmusic.js';
+import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, isStreamRef, prefetchAudioStream, rateSong, searchYtMusic } from './services/ytmusic.js';
 import { getAlbumArtAnsi } from './services/albumArt.js';
 import { loadAuthCredentials } from './services/auth.js';
 import { formatMsToTime } from './parser/lrc.js';
@@ -48,6 +48,7 @@ export class LyricalApp {
   private queue: Song[] = [];
   private currentQueueIndex: number = 0;
   private autoPlayRadio: boolean = true;
+  private shuffleEnabled: boolean = false;
 
   // Search state
   private searchQuery: string = '';
@@ -245,7 +246,7 @@ export class LyricalApp {
     }
 
     if (this.viewMode === 'queue') {
-      this.handleQueueInput(key);
+      this.handleQueueInput(key, str);
       return;
     }
 
@@ -392,6 +393,45 @@ export class LyricalApp {
       return;
     }
 
+    // Toggle Loop: 'o'
+    if (ch === 'o' || ch === 'O' || name === 'o') {
+      this.player.toggleLoop();
+      this.showNotification(`LOOP: ${this.player.getState().loop ? 'ON' : 'OFF'}`, 1500);
+      return;
+    }
+
+    // Toggle Shuffle: 'x'
+    if (ch === 'x' || ch === 'X' || name === 'x') {
+      this.toggleShuffle();
+      return;
+    }
+
+    // Toggle Mute: 'u'
+    if (ch === 'u' || ch === 'U' || name === 'u') {
+      this.player.toggleMute();
+      const st = this.player.getState();
+      this.showNotification(st.muted ? 'VOL: MUTE' : `VOL: ${st.volume}%`, 1500);
+      return;
+    }
+
+    // Speed Adjustment: ',' and '.'
+    if (ch === ',' || name === 'comma') {
+      this.player.adjustSpeed(-0.25);
+      this.showNotification(`SPD: ${this.player.getState().speed.toFixed(2)}x`, 1500);
+      return;
+    }
+    if (ch === '.' || name === 'period') {
+      this.player.adjustSpeed(0.25);
+      this.showNotification(`SPD: ${this.player.getState().speed.toFixed(2)}x`, 1500);
+      return;
+    }
+
+    // Like Song: 'k'
+    if (ch === 'k' || ch === 'K' || name === 'k') {
+      void this.likeCurrentSong();
+      return;
+    }
+
     // Tab -> Open Search Modal
     if (name === 'tab') {
       this.openSearchModal();
@@ -489,6 +529,40 @@ export class LyricalApp {
         const target = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
         if (isStreamRef(target)) prefetchAudioStream(target);
       });
+    }
+  }
+
+  private toggleShuffle(): void {
+    this.shuffleEnabled = !this.shuffleEnabled;
+    if (this.shuffleEnabled && this.currentQueueIndex < this.queue.length - 1) {
+      const upcoming = this.queue.slice(this.currentQueueIndex + 1);
+      for (let i = upcoming.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [upcoming[i], upcoming[j]] = [upcoming[j], upcoming[i]];
+      }
+      this.queue.splice(this.currentQueueIndex + 1, upcoming.length, ...upcoming);
+    }
+    this.showNotification(`Shuffle: ${this.shuffleEnabled ? 'ON' : 'OFF'}`, 1500);
+  }
+
+  private async likeCurrentSong(): Promise<void> {
+    const song = this.player.getCurrentSong();
+    if (!song) {
+      this.showNotification('Cannot like: no song playing');
+      return;
+    }
+    const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
+      ? song.id
+      : (song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl) ? song.audioUrl : '');
+    if (!ytId) {
+      this.showNotification('Cannot like: not a YouTube track');
+      return;
+    }
+    const success = await rateSong(ytId, 'LIKE');
+    if (success) {
+      this.showNotification(`Liked: ${song.title}`);
+    } else {
+      this.showNotification('Failed to like (login with YouTube Music auth)');
     }
   }
 
@@ -767,9 +841,17 @@ export class LyricalApp {
     this.viewMode = 'queue';
   }
 
-  private handleQueueInput(key: readline.Key): void {
-    if (key.name === 'escape' || key.name === 'q') {
+  private handleQueueInput(key: readline.Key, str: string = ''): void {
+    const ch = str || key.sequence || '';
+    const name = (key.name || '').toLowerCase();
+
+    if (name === 'escape' || ch === 'q' || name === 'q') {
       this.viewMode = 'karaoke';
+      return;
+    }
+
+    if (ch === 'x' || ch === 'X' || name === 'x') {
+      this.toggleShuffle();
       return;
     }
 
@@ -918,6 +1000,7 @@ export class LyricalApp {
       visualizerType: this.visualizer.getType(),
       viewMode: this.viewMode,
       showTimestamps: this.showTimestamps,
+      shuffle: this.shuffleEnabled,
     });
 
     const headerHeight = headerLines.length;

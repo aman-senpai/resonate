@@ -68,6 +68,7 @@ export interface PlayerState {
   offsetMs: number;
   loop: boolean;
   volume: number;
+  muted: boolean;
   progressRatio: number;
   lineProgressRatio: number; // Progress within the active line [0.0 - 1.0]
   backend: string;

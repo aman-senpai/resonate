@@ -367,7 +367,7 @@ export function renderAuthModal(
 
 export function renderHelpModal(theme: Theme, dims: ModalDimensions): string[] {
   const modalW = Math.min(84, Math.max(30, dims.width - 2));
-  const modalH = Math.min(22, Math.max(12, dims.height - 2));
+  const modalH = Math.min(24, Math.max(12, dims.height - 2));
   const contentW = modalW - 4;
   const contentLines: string[] = [];
 
@@ -377,13 +377,17 @@ export function renderHelpModal(theme: Theme, dims: ModalDimensions): string[] {
     ['↑ / ↓', 'Volume up / down by 5%'],
     ['0 / Home', 'Restart track (0:00)'],
     ['N / B', 'Next / Prev track in queue'],
+    ['O', 'Toggle loop current track'],
+    ['X', 'Shuffle remaining queue'],
+    ['U', 'Mute / unmute'],
+    [', / .', 'Speed − / + 0.25x'],
+    ['K', 'Like current YouTube track'],
     ['/ or S', 'Search YouTube & LRCLIB'],
     ['P or L', 'Playlists & Liked Songs'],
     ['Q', 'Playback Queue (d: remove)'],
     ['E', 'Explore & Top Charts'],
     ['R or M', 'Reading mode (PgUp/Dn: scroll)'],
   ];
-
   const col2: Array<[string, string]> = [
     ['V', 'Cycle Visualizers (7 modes)'],
     ['T / Shift+T', 'Cycle Color Themes'],

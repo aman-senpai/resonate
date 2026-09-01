@@ -43,6 +43,11 @@ Quote the title when it contains apostrophes (`don't`). Same thing: `resonate pl
 | <kbd>←</kbd> <kbd>→</kbd> | Seek 5s · <kbd>Shift</kbd> 15s |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Volume |
 | <kbd>N</kbd> <kbd>B</kbd> | Next / previous |
+| <kbd>O</kbd> | Toggle loop |
+| <kbd>X</kbd> | Toggle shuffle |
+| <kbd>U</kbd> | Mute / unmute |
+| <kbd>,</kbd> <kbd>.</kbd> | Speed − / + 0.25x |
+| <kbd>K</kbd> | Like track |
 | <kbd>/</kbd> | Search |
 | <kbd>Q</kbd> | Queue |
 | <kbd>V</kbd> | Visualizer |

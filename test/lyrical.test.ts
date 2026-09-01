@@ -719,3 +719,132 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
     assert.strictEqual(isStreamRef('https://music.youtube.com/watch?v=dQw4w9WgXcQ'), true);
   });
 });
+
+describe('Loop Shuffle Mute Speed Like Controls', () => {
+  it('should mute, restore prior volume, and unmute on setVolume', () => {
+    const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
+    player.setVolume(80);
+    assert.strictEqual(player.getState().muted, false);
+    assert.strictEqual(player.getState().volume, 80);
+
+    player.toggleMute();
+    assert.strictEqual(player.getState().muted, true);
+    assert.strictEqual(player.getState().volume, 0);
+
+    player.toggleMute();
+    assert.strictEqual(player.getState().muted, false);
+    assert.strictEqual(player.getState().volume, 80);
+
+    player.toggleMute();
+    player.setVolume(40);
+    assert.strictEqual(player.getState().muted, false);
+    assert.strictEqual(player.getState().volume, 40);
+    player.destroy();
+  });
+
+  it('should wire karaoke keys for loop, shuffle, mute, speed, and like', () => {
+    const app = new LyricalApp({ initialSong: globalSong, initialTheme: 'ytmusic' });
+    const appSeam = app as unknown as {
+      viewMode: string;
+      shuffleEnabled: boolean;
+      queue: typeof globalSong[];
+      currentQueueIndex: number;
+      player: LyricPlayer;
+      handleKey: (key: { name?: string; sequence?: string }, str?: string) => void;
+      likeCurrentSong: () => Promise<void>;
+    };
+    appSeam.player.destroy();
+    appSeam.player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
+
+
+    const extra = [
+      { ...globalSong, id: 'track-a', title: 'A' },
+      { ...globalSong, id: 'track-b', title: 'B' },
+      { ...globalSong, id: 'track-c', title: 'C' },
+    ];
+    appSeam.queue = [globalSong, ...extra];
+    appSeam.currentQueueIndex = 0;
+
+    assert.strictEqual(appSeam.player.getState().loop, false);
+    appSeam.handleKey({ name: 'o' }, 'o');
+    assert.strictEqual(appSeam.player.getState().loop, true);
+    appSeam.handleKey({ name: 'o' }, 'o');
+    assert.strictEqual(appSeam.player.getState().loop, false);
+
+    const currentId = appSeam.queue[0].id;
+    const upcomingIds = new Set(appSeam.queue.slice(1).map((s) => s.id));
+    appSeam.handleKey({ name: 'x' }, 'x');
+    assert.strictEqual(appSeam.shuffleEnabled, true);
+    assert.strictEqual(appSeam.queue[0].id, currentId);
+    assert.strictEqual(appSeam.queue.length, 4);
+    assert.deepStrictEqual(new Set(appSeam.queue.slice(1).map((s) => s.id)), upcomingIds);
+
+    appSeam.handleKey({ name: 'u' }, 'u');
+    assert.strictEqual(appSeam.player.getState().muted, true);
+    assert.strictEqual(appSeam.player.getState().volume, 0);
+    appSeam.handleKey({ name: 'u' }, 'u');
+    assert.strictEqual(appSeam.player.getState().muted, false);
+
+    const baseSpeed = appSeam.player.getState().speed;
+    appSeam.handleKey({ name: 'comma' }, ',');
+    assert.ok(appSeam.player.getState().speed < baseSpeed);
+    appSeam.handleKey({ name: 'period' }, '.');
+    assert.strictEqual(appSeam.player.getState().speed, baseSpeed);
+
+    let liked = false;
+    appSeam.likeCurrentSong = async () => {
+      liked = true;
+    };
+    appSeam.handleKey({ name: 'k' }, 'k');
+    assert.strictEqual(liked, true);
+    assert.strictEqual(appSeam.viewMode, 'karaoke');
+  });
+
+  it('should shuffle from the queue modal without closing it', () => {
+    const app = new LyricalApp({ initialSong: globalSong, initialTheme: 'ytmusic' });
+    const appSeam = app as unknown as {
+      viewMode: string;
+      shuffleEnabled: boolean;
+      queue: typeof globalSong[];
+      currentQueueIndex: number;
+      handleKey: (key: { name?: string; sequence?: string }, str?: string) => void;
+    };
+    appSeam.queue = [
+      globalSong,
+      { ...globalSong, id: 'track-a', title: 'A' },
+      { ...globalSong, id: 'track-b', title: 'B' },
+    ];
+    appSeam.handleKey({ sequence: 'q' }, 'q');
+    assert.strictEqual(appSeam.viewMode, 'queue');
+    appSeam.handleKey({ name: 'x' }, 'x');
+    assert.strictEqual(appSeam.viewMode, 'queue');
+    assert.strictEqual(appSeam.shuffleEnabled, true);
+  });
+
+  it('should render SHUF and MUTE badges in the control bar and help keys', () => {
+    const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
+    player.toggleMute();
+    const mutedState = player.getState();
+    const lines = renderControlBar({
+      width: 160,
+      state: mutedState,
+      theme: THEMES.ytmusic,
+      visualizerType: 'bars',
+      viewMode: 'karaoke',
+      showTimestamps: false,
+      shuffle: true,
+    });
+    const bar = stripAnsi(lines.join('\n'));
+    assert.ok(bar.includes('SHUF: ON'));
+    assert.ok(bar.includes('VOL: MUTE'));
+
+    const help = stripAnsi(renderHelpModal(THEMES.ytmusic, { width: 80, height: 24 }).join('\n'));
+    assert.ok(help.includes('Toggle loop') || help.includes('loop'));
+    assert.ok(/Shuffle/i.test(help));
+    assert.ok(/Mute/i.test(help));
+    assert.ok(/Speed/i.test(help));
+    assert.ok(/Like/i.test(help));
+    player.destroy();
+  });
+});
+

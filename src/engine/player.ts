@@ -19,6 +19,8 @@ export class LyricPlayer extends EventEmitter {
   private offsetMs: number = 0;
   private loop: boolean = false;
   private volume: number = 100;
+  private muted: boolean = false;
+  private volumeBeforeMute: number = 100;
   private isBuffering: boolean = false;
 
   private activeLineIndex: number = -1;
@@ -255,8 +257,27 @@ export class LyricPlayer extends EventEmitter {
     this.emitStateChange();
   }
 
+  public toggleMute(): void {
+    if (!this.muted) {
+      if (this.volume > 0) {
+        this.volumeBeforeMute = this.volume;
+      }
+      this.muted = true;
+      this.volume = 0;
+      this.backend.setVolume(0);
+    } else {
+      this.muted = false;
+      this.volume = this.volumeBeforeMute > 0 ? this.volumeBeforeMute : 100;
+      this.backend.setVolume(this.volume);
+    }
+    this.emitStateChange();
+  }
+
   public setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(150, volume));
+    if (this.volume > 0) {
+      this.muted = false;
+    }
     this.backend.setVolume(this.volume);
     this.emitStateChange();
   }
@@ -293,6 +314,7 @@ export class LyricPlayer extends EventEmitter {
       offsetMs: this.offsetMs,
       loop: this.loop,
       volume: this.volume,
+      muted: this.muted,
       progressRatio,
       lineProgressRatio,
       backend: this.backend.getName(),
