@@ -428,8 +428,10 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   }
 
   public seek(targetMs: number): void {
-    this.currentMs = Math.max(0, targetMs);
+    const target = Math.max(0, targetMs);
+    this.currentMs = target;
     this.lastTime = Date.now();
+    this.stopClock();
 
     if (this.status === 'paused') {
       if (this.frozen) {
@@ -452,21 +454,31 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       return;
     }
 
-    void this.spawnPlayer(source, this.currentMs, sessionId).catch(async () => {
-      if (sessionId !== this.playSessionId) return;
-      if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
-      try {
-        const fresh = await resolveAudioStreamUrl(this.currentTarget);
+    void this.spawnPlayer(source, target, sessionId)
+      .then(() => {
         if (sessionId !== this.playSessionId) return;
-        this.currentStreamUrl = fresh;
-        await this.spawnPlayer(fresh, this.currentMs, sessionId);
-      } catch (err: unknown) {
-        this.status = 'paused';
-        this.stopClock();
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
-      }
-    });
-    this.startClock();
+        this.currentMs = target;
+        this.lastTime = Date.now();
+        this.startClock();
+      })
+      .catch(async () => {
+        if (sessionId !== this.playSessionId) return;
+        if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
+        try {
+          const fresh = await resolveAudioStreamUrl(this.currentTarget);
+          if (sessionId !== this.playSessionId) return;
+          this.currentStreamUrl = fresh;
+          await this.spawnPlayer(fresh, target, sessionId);
+          if (sessionId !== this.playSessionId) return;
+          this.currentMs = target;
+          this.lastTime = Date.now();
+          this.startClock();
+        } catch (err: unknown) {
+          this.status = 'paused';
+          this.stopClock();
+          this.emit('error', err instanceof Error ? err : new Error(String(err)));
+        }
+      });
   }
 
   public setVolume(vol: number): void {

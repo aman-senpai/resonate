@@ -29,8 +29,8 @@ export class LyricPlayer extends EventEmitter {
   private timerHandle: NodeJS.Timeout | null = null;
   private lastHighResTimestamp: number = 0;
   private lastBackendSyncAt: number = 0;
+  private seekHold: boolean = false;
   private targetFps: number = 30;
-
   constructor(song?: Song, customBackend?: IAudioBackend) {
     super();
     this.backend = customBackend || createAudioBackend();
@@ -45,6 +45,7 @@ export class LyricPlayer extends EventEmitter {
     if (this.backend instanceof EventEmitter) {
       this.backend.on('status', (state: { status: 'playing' | 'paused' | 'stopped' | 'ended'; currentMs: number; volume: number; spectrum?: number[] }) => {
         if (this.status === 'playing') {
+          this.seekHold = false;
           this.currentTimeMs = state.currentMs;
           this.lastHighResTimestamp = performance.now();
           this.lastBackendSyncAt = this.lastHighResTimestamp;
@@ -138,11 +139,11 @@ export class LyricPlayer extends EventEmitter {
     this.timerHandle = setInterval(() => this.onTick(), intervalMs);
     this.emitStateChange();
   }
-
   public pause(): void {
     if (this.status !== 'playing') return;
 
     this.status = 'paused';
+    this.seekHold = false;
     this.backend.pause();
 
     clearInterval(this.timerHandle!);
@@ -158,9 +159,9 @@ export class LyricPlayer extends EventEmitter {
       await this.play();
     }
   }
-
   public stop(): void {
     this.status = 'stopped';
+    this.seekHold = false;
     this.backend.stop();
 
     clearInterval(this.timerHandle!);
@@ -183,6 +184,8 @@ export class LyricPlayer extends EventEmitter {
     const maxDuration = this.durationMs > 0 ? this.durationMs : 3600000;
     this.currentTimeMs = Math.max(0, Math.min(targetMs, maxDuration));
     this.lastHighResTimestamp = performance.now();
+    this.lastBackendSyncAt = this.lastHighResTimestamp;
+    this.seekHold = this.status === 'playing';
     this.backend.seek(this.currentTimeMs);
     this.updateActiveIndices();
     if (this.status === 'playing' && !this.timerHandle) {
@@ -303,7 +306,15 @@ export class LyricPlayer extends EventEmitter {
     const elapsed = (now - this.lastHighResTimestamp) * this.speed;
     this.lastHighResTimestamp = now;
 
-    // Backend status events are the master clock. Only free-run if they stop.
+    if (this.seekHold) {
+      if (now - this.lastBackendSyncAt > 3000) this.seekHold = false;
+      else {
+        this.updateActiveIndices();
+        this.emit('tick', this.getState());
+        return;
+      }
+    }
+
     if (now - this.lastBackendSyncAt > 250) {
       this.currentTimeMs += elapsed;
     }

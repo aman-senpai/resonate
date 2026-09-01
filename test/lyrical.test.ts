@@ -607,6 +607,19 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
     player.stop();
   });
 
+  it('should keep lyric line in sync with seek position', async () => {
+    const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
+    await player.play();
+    player.seek(5000);
+    assert.strictEqual(player.getState().currentTimeMs, 5000);
+    assert.strictEqual(player.getState().activeLineIndex, 1);
+    player.seek(500);
+    assert.strictEqual(player.getState().activeLineIndex, 0);
+    player.seek(9000);
+    assert.strictEqual(player.getState().activeLineIndex, 2);
+    player.stop();
+  });
+
   it('should resume from pause without leaving playing state', async () => {
     const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
     await player.play();
