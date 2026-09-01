@@ -2,7 +2,7 @@
 
 Terminal YouTube Music player. Synced lyrics, visualizers, album art.
 
-![We Don't Talk Anymore playing in Resonate](assets/screenshot.svg)
+<video src="assets/demo.webm" controls muted playsinline width="100%"></video>
 
 ## Install
 
