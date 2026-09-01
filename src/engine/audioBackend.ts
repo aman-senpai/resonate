@@ -46,9 +46,17 @@ function volumeFilter(vol: number): string {
   return `volume=${linear.toFixed(3)}`;
 }
 
-function pulseInputIndexForPid(raw: unknown, pid: number): string | null {
-  if (!Array.isArray(raw)) return null;
-  const pidStr = String(pid);
+const PLAYER_APP_NAMES: Record<string, true> = {
+  ffplay: true,
+  mpv: true,
+  ffmpeg: true,
+  resonate: true,
+};
+
+function pulseIndexes(raw: unknown, pid: number | null): string[] {
+  if (!Array.isArray(raw)) return [];
+  const pidStr = pid != null ? String(pid) : '';
+  const found: string[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     if (!('index' in item) || !('properties' in item)) continue;
@@ -56,16 +64,25 @@ function pulseInputIndexForPid(raw: unknown, pid: number): string | null {
     const properties = item.properties;
     if (typeof index !== 'number' && typeof index !== 'string') continue;
     if (!properties || typeof properties !== 'object') continue;
-    if (!('application.process.id' in properties)) continue;
-    const procId = properties['application.process.id'];
-    if (procId === pidStr || procId === pid) return String(index);
+    let match = false;
+    if (pidStr && 'application.process.id' in properties) {
+      const procId = properties['application.process.id'];
+      if (procId === pidStr || procId === pid) match = true;
+    }
+    if ('application.name' in properties && typeof properties['application.name'] === 'string') {
+      if (PLAYER_APP_NAMES[properties['application.name']]) match = true;
+    }
+    if ('node.name' in properties && typeof properties['node.name'] === 'string') {
+      if (PLAYER_APP_NAMES[properties['node.name']]) match = true;
+    }
+    if (match) found.push(String(index));
   }
-  return null;
+  return found;
 }
 
-function setPulseVolume(pid: number, vol: number): boolean {
+function setPulseVolume(pid: number | null, vol: number): boolean {
   const pactl = findExecutable('pactl');
-  if (!pactl || !pid) return false;
+  if (!pactl) return false;
   const pct = `${Math.max(0, Math.min(150, Math.round(vol)))}%`;
 
   const jsonRun = spawnSync(pactl, ['--format=json', 'list', 'sink-inputs'], {
@@ -74,28 +91,36 @@ function setPulseVolume(pid: number, vol: number): boolean {
   });
   if (jsonRun.status === 0 && jsonRun.stdout.trim().startsWith('[')) {
     try {
-      const index = pulseInputIndexForPid(JSON.parse(jsonRun.stdout), pid);
-      if (index) {
-        spawnSync(pactl, ['set-sink-input-volume', index, pct], { timeout: 2000 });
+      const indexes = pulseIndexes(JSON.parse(jsonRun.stdout), pid);
+      if (indexes.length > 0) {
+        for (const index of indexes) {
+          spawnSync(pactl, ['set-sink-input-volume', index, pct], { timeout: 2000 });
+        }
         return true;
       }
     } catch {
-      // fall through to text parse
+      // text fallback
     }
   }
 
   const textRun = spawnSync(pactl, ['list', 'sink-inputs'], { encoding: 'utf8', timeout: 2000 });
   if (textRun.status !== 0 || !textRun.stdout) return false;
   const blocks = textRun.stdout.split(/Sink Input #/);
-  const needle = `application.process.id = "${pid}"`;
+  let ok = false;
   for (const block of blocks) {
-    if (!block.includes(needle)) continue;
+    const named =
+      block.includes('application.name = "ffplay"') ||
+      block.includes('application.name = "mpv"') ||
+      block.includes('application.name = "ffmpeg"') ||
+      block.includes('node.name = "ffplay"');
+    const pidHit = pid != null && block.includes(`application.process.id = "${pid}"`);
+    if (!named && !pidHit) continue;
     const id = parseInt(block, 10);
     if (!Number.isFinite(id)) continue;
     spawnSync(pactl, ['set-sink-input-volume', String(id), pct], { timeout: 2000 });
-    return true;
+    ok = true;
   }
-  return false;
+  return ok;
 }
 
 export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend {
@@ -438,10 +463,8 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
 
   public setVolume(vol: number): void {
     this.currentVolume = Math.max(0, Math.min(150, vol));
-    if (this.proc && this.proc.pid) {
-      if (!setPulseVolume(this.proc.pid, this.currentVolume)) {
-        this.scheduleVolumeApply();
-      }
+    if (!setPulseVolume(this.proc?.pid ?? null, this.currentVolume)) {
+      this.scheduleVolumeApply();
     }
   }
 
@@ -475,13 +498,9 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
 
   private scheduleVolumeApply(): void {
     this.clearVolumeTimers();
-    const pid = this.proc?.pid;
-    if (!pid) return;
-    for (const delay of [80, 200, 500]) {
+    for (const delay of [60, 180, 400, 900]) {
       this.volumeTimers.push(setTimeout(() => {
-        if (this.proc?.pid === pid) {
-          setPulseVolume(pid, this.currentVolume);
-        }
+        setPulseVolume(this.proc?.pid ?? null, this.currentVolume);
       }, delay));
     }
   }

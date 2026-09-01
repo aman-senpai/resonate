@@ -184,9 +184,7 @@ function renderPastLine(
   const icon = '  ';
   const availWidth = Math.max(5, maxWidth - getVisualWidth(icon));
 
-  // Decay color based on distance: distance 1 is 65% bright, distance 2 is 40%, etc.
-  const decayFactor = Math.pow(0.55, distance);
-  const fadedColor = lerpColor(theme.background, theme.dimmed, Math.max(0.15, decayFactor));
+  const fadedColor = distance <= 1 ? theme.dimmed : lerpColor(theme.subtle, theme.dimmed, 0.7);
 
   const text = isMusicalNoteLine(line) ? formatMusicalNoteText(line) : line.text || ' ';
   const styledText = colorText(truncate(text, availWidth), fadedColor);
@@ -208,12 +206,9 @@ function renderUpcomingLine(
 
   let styledText: string;
   if (distance === 1) {
-    // Next immediate line: soft bright anticipation
     styledText = colorText(truncate(text, availWidth), theme.text);
   } else {
-    // Distant upcoming lines: fade toward subtle
-    const decayFactor = Math.pow(0.65, distance - 1);
-    const fadedColor = lerpColor(theme.subtle, theme.dimmed, decayFactor);
+    const fadedColor = lerpColor(theme.text, theme.dimmed, Math.min(0.45, (distance - 1) * 0.15));
     styledText = colorText(truncate(text, availWidth), fadedColor);
   }
 

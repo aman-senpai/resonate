@@ -8,7 +8,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SearchResult, Song, YtExploreCategory, YtPlaylist, YtTrack } from '../types.js';
 import { findExecutable, getCookiesFilePath, loadAuthCredentials, saveAuthCredentials } from './auth.js';
-
+import { getCachedMediaPath, getCachedStreamUrl, prefetchMediaFile, rememberStreamUrl as persistStreamUrl } from './mediaCache.js';
 const execFileAsync = promisify(execFile);
 
 let innertubeInstance: Innertube | null = null;
@@ -255,18 +255,29 @@ function expiryFromStreamUrl(url: string): number {
 }
 
 function cachedStreamUrl(input: string): string | undefined {
-  const hit = streamCache.get(streamCacheKey(input));
+  const key = streamCacheKey(input);
+  const hit = streamCache.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.url;
+  const disk = getCachedStreamUrl(key);
+  if (disk) {
+    streamCache.set(key, { url: disk, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return disk;
+  }
   return undefined;
 }
 
 function rememberStreamUrl(input: string, url: string): void {
-  streamCache.set(streamCacheKey(input), { url, expiresAt: expiryFromStreamUrl(url) });
+  const expiresAt = expiryFromStreamUrl(url);
+  const key = streamCacheKey(input);
+  streamCache.set(key, { url, expiresAt });
+  persistStreamUrl(key, url, expiresAt);
 }
 
 export function prefetchAudioStream(videoIdOrUrl: string): void {
   if (!isStreamRef(videoIdOrUrl)) return;
-  if (cachedStreamUrl(videoIdOrUrl)) return;
+  const key = streamCacheKey(videoIdOrUrl);
+  if (/^[a-zA-Z0-9_-]{11}$/.test(key)) prefetchMediaFile(key);
+  if (cachedStreamUrl(videoIdOrUrl) || getCachedMediaPath(key)) return;
   void resolveAudioStreamUrl(videoIdOrUrl).catch(() => {});
 }
 
@@ -276,10 +287,13 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
     return trimmed;
   }
 
+  const key = streamCacheKey(trimmed);
+  const file = /^[a-zA-Z0-9_-]{11}$/.test(key) ? getCachedMediaPath(key) : undefined;
+  if (file) return file;
+
   const cached = cachedStreamUrl(trimmed);
   if (cached) return cached;
 
-  const key = streamCacheKey(trimmed);
   const pending = inflightStreams.get(key);
   if (pending) return pending;
 

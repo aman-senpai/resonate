@@ -11,8 +11,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [255, 230, 0], // #FFE600 Neon Yellow
     highlight: [255, 255, 255],
     activeLine: [0, 255, 234],
-    dimmed: [90, 100, 130],
-    subtle: [50, 60, 85],
+    dimmed: [150, 160, 190],
+    subtle: [130, 140, 170],
     text: [230, 240, 255],
     background: [10, 12, 20],
     visualizer: [
@@ -47,8 +47,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [125, 207, 255], // #7DCFFF Sky Blue
     highlight: [255, 255, 255],
     activeLine: [157, 218, 255],
-    dimmed: [86, 95, 137],
-    subtle: [48, 54, 82],
+    dimmed: [150, 158, 200],
+    subtle: [130, 138, 180],
     text: [192, 202, 245],
     background: [26, 27, 38],
     visualizer: [
@@ -81,8 +81,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [255, 215, 0], // Bright Gold
     highlight: [255, 250, 240],
     activeLine: [255, 140, 60],
-    dimmed: [120, 80, 100],
-    subtle: [70, 45, 60],
+    dimmed: [190, 150, 155],
+    subtle: [170, 135, 145],
     text: [255, 235, 225],
     background: [24, 14, 24],
     visualizer: [
@@ -115,8 +115,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [163, 190, 140], // Aurora Green
     highlight: [236, 239, 244],
     activeLine: [170, 225, 240],
-    dimmed: [94, 129, 172],
-    subtle: [67, 76, 94],
+    dimmed: [150, 170, 200],
+    subtle: [130, 150, 180],
     text: [229, 233, 240],
     background: [46, 52, 64],
     visualizer: [
@@ -149,8 +149,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [0, 200, 80],
     highlight: [220, 255, 230],
     activeLine: [120, 255, 160],
-    dimmed: [30, 100, 50],
-    subtle: [15, 55, 28],
+    dimmed: [90, 190, 120],
+    subtle: [70, 160, 100],
     text: [200, 255, 210],
     background: [10, 18, 12],
     visualizer: [
@@ -182,8 +182,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [139, 233, 253], // Cyan
     highlight: [255, 255, 255],
     activeLine: [255, 150, 220],
-    dimmed: [110, 80, 130],
-    subtle: [65, 45, 80],
+    dimmed: [175, 150, 195],
+    subtle: [155, 130, 175],
     text: [248, 248, 242],
     background: [34, 28, 48],
     visualizer: [
@@ -216,8 +216,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [255, 228, 225], // Misty rose
     highlight: [255, 255, 255],
     activeLine: [255, 200, 215],
-    dimmed: [140, 100, 120],
-    subtle: [80, 50, 70],
+    dimmed: [205, 165, 180],
+    subtle: [185, 145, 165],
     text: [255, 240, 245],
     background: [30, 18, 26],
     visualizer: [
@@ -249,8 +249,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [240, 230, 140], // Khaki / Pale gold
     highlight: [255, 250, 220],
     activeLine: [255, 230, 100],
-    dimmed: [120, 100, 60],
-    subtle: [70, 55, 30],
+    dimmed: [190, 165, 110],
+    subtle: [165, 145, 95],
     text: [250, 245, 230],
     background: [18, 16, 14],
     visualizer: [
@@ -282,8 +282,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [255, 140, 140], // Pastel Red
     highlight: [255, 255, 255],
     activeLine: [255, 50, 75],
-    dimmed: [140, 40, 50],
-    subtle: [60, 20, 25],
+    dimmed: [200, 140, 150],
+    subtle: [175, 130, 140],
     text: [245, 245, 245],
     background: [15, 10, 12],
     visualizer: [
@@ -315,8 +315,8 @@ export const THEMES: Record<string, Theme> = {
     accent: [100, 240, 150],
     highlight: [255, 255, 255],
     activeLine: [30, 225, 110],
-    dimmed: [30, 100, 50],
-    subtle: [15, 45, 25],
+    dimmed: [130, 185, 150],
+    subtle: [115, 165, 135],
     text: [240, 240, 240],
     background: [18, 18, 18],
     visualizer: [

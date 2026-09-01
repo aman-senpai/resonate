@@ -481,12 +481,14 @@ export class LyricalApp {
   }
 
   private prefetchUpcoming(): void {
-    const next = this.queue[this.currentQueueIndex + 1];
-    if (!next) return;
-    void ensurePlayableSong(next).then((song) => {
-      const target = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
-      if (isStreamRef(target)) prefetchAudioStream(target);
-    });
+    for (let offset = 1; offset <= 3; offset++) {
+      const next = this.queue[this.currentQueueIndex + offset];
+      if (!next) continue;
+      void ensurePlayableSong(next).then((song) => {
+        const target = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
+        if (isStreamRef(target)) prefetchAudioStream(target);
+      });
+    }
   }
 
   private async fetchArtForSong(song: Song): Promise<void> {
