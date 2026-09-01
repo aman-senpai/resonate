@@ -95,7 +95,7 @@ export async function runCli(args: string[]): Promise<void> {
   if (command === 'get' || command === 'fetch') {
     const query = positional.slice(1).join(' ');
     if (!query) {
-      console.log(colorText('Error: Please provide a song title or query. Example: lyrical get "Bohemian Rhapsody"', [255, 100, 100]));
+      console.log(colorText('Error: Please provide a song title or query. Example: resonate get "Bohemian Rhapsody"', [255, 100, 100]));
       process.exit(1);
     }
     await runGetCli(query);
@@ -233,13 +233,12 @@ async function handleAuthCommand(args: string[], flags: Record<string, string | 
     console.log('You can authenticate using one of the following methods:');
     console.log('');
     console.log(` 1. ${ANSI.BOLD}Browser Cookie Import${ANSI.RESET} (Easiest & supports Premium):`);
-    console.log(`    ${colorText('lyrical auth login --browser chrome', [255, 215, 0])}`);
-    console.log(`    ${colorText('lyrical auth login --browser firefox', [255, 215, 0])}`);
-    console.log(`    ${colorText('lyrical auth login --browser brave', [255, 215, 0])}`);
+    console.log(`    ${colorText('resonate auth login --browser chrome', [255, 215, 0])}`);
+    console.log(`    ${colorText('resonate auth login --browser firefox', [255, 215, 0])}`);
+    console.log(`    ${colorText('resonate auth login --browser brave', [255, 215, 0])}`);
     console.log('');
     console.log(` 2. ${ANSI.BOLD}Manual Cookie String${ANSI.RESET}:`);
-    console.log(`    ${colorText('lyrical auth login --cookie "SAPISID=...; __Secure-3PAPISID=..."', [255, 215, 0])}`);
-    console.log('');
+    console.log(`    ${colorText('resonate auth login --cookie "SAPISID=...; __Secure-3PAPISID=..."', [255, 215, 0])}`);
     console.log(` 3. ${ANSI.BOLD}OAuth Device Code Flow${ANSI.RESET}:`);
     console.log('    Starting Google Device Code authorization...');
     console.log('');
@@ -260,7 +259,7 @@ async function handleAuthCommand(args: string[], flags: Record<string, string | 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.log(colorText(`Notice: ${msg}`, [200, 200, 200]));
-      console.log(colorText('Tip: Use `lyrical auth login --browser chrome` for seamless browser login.', [255, 215, 0]));
+      console.log(colorText('Tip: Use `resonate auth login --browser chrome` for seamless browser login.', [255, 215, 0]));
     }
     return;
   }
@@ -308,8 +307,8 @@ async function checkAndDisplayAuthStatus(): Promise<void> {
   } else {
     console.log('');
     console.log(' To sign in to your YouTube Music account:');
-    console.log(`   ${colorText('lyrical auth login --browser chrome', [255, 215, 0])}`);
-    console.log(`   ${colorText('lyrical auth login', [255, 215, 0])}`);
+    console.log(`   ${colorText('resonate auth login --browser chrome', [255, 215, 0])}`);
+    console.log(`   ${colorText('resonate auth login', [255, 215, 0])}`);
   }
 }
 
@@ -341,7 +340,7 @@ async function handlePlaylistCommand(args: string[], flags: Record<string, strin
       }
 
       if (list.length === 0) {
-        console.log(colorText('No playlists found. Sign in via `lyrical auth login` to view your library.', [200, 200, 200]));
+        console.log(colorText('No playlists found. Sign in via `resonate auth login` to view your library.', [200, 200, 200]));
         return;
       }
 
@@ -352,7 +351,7 @@ async function handlePlaylistCommand(args: string[], flags: Record<string, strin
         console.log(`  ${colorText(`${i + 1}.`, [255, 215, 0])} ${ANSI.BOLD}${p.title}${ANSI.RESET}${count} [${p.id}] - ${icon}`);
       }
       console.log('');
-      console.log(colorText('Tip: Play a playlist with `lyrical playlist play <id>`', [255, 215, 0]));
+      console.log(colorText('Tip: Play a playlist with `resonate playlist play <id>`', [255, 215, 0]));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.log(colorText(`Error: ${message}`, [255, 100, 100]));
@@ -363,7 +362,7 @@ async function handlePlaylistCommand(args: string[], flags: Record<string, strin
   if (sub === 'show') {
     const plId = args[1];
     if (!plId) {
-      console.log(colorText('Error: Please specify a playlist ID. Example: lyrical playlist show LM', [255, 100, 100]));
+      console.log(colorText('Error: Please specify a playlist ID. Example: resonate playlist show LM', [255, 100, 100]));
       return;
     }
 
@@ -455,7 +454,7 @@ async function handleExploreCommand(flags: Record<string, string | boolean | num
     }
 
     console.log('');
-    console.log(colorText('Tip: Play any item with `lyrical play <id>`', [255, 215, 0]));
+    console.log(colorText('Tip: Play any item with `resonate play <id>`', [255, 215, 0]));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.log(colorText(`Error: ${message}`, [255, 100, 100]));
@@ -473,7 +472,7 @@ async function runSearchCli(query: string, flags: Record<string, string | boolea
   }
 
   if (!query.trim()) {
-    console.log(colorText('Error: provide a search query when not attached to a TTY. Example: lyrical search "Queen"', [255, 100, 100]));
+    console.log(colorText('Error: provide a search query when not attached to a TTY. Example: resonate search "Queen"', [255, 100, 100]));
     process.exit(1);
   }
 
@@ -529,31 +528,30 @@ function printThemes(): void {
     console.log(`  ${ANSI.BOLD}${pad(t.id, 12)}${ANSI.RESET} ${badge} ${desc}`);
   }
   console.log('');
-  console.log('Use with: lyrical --theme <name>');
+  console.log('Use with: resonate --theme <name>');
 }
 
-
 function printVersion(): void {
-  console.log('Lyrical YouTube Music CLI v1.0.0');
+  console.log('Resonate YouTube Music CLI v1.0.0');
 }
 
 function printHelp(): void {
   console.log(`
-${ANSI.BOLD}${gradientText('  ♫ LYRICAL - YouTube Music Terminal Player & Lyrics CLI ♫  ', [[255, 0, 51], [255, 100, 100], [255, 215, 0]], true)}${ANSI.RESET}
+${ANSI.BOLD}${gradientText('  RESONATE - YouTube Music Terminal Player & Lyrics CLI  ', [[255, 0, 51], [255, 100, 100], [255, 215, 0]], true)}${ANSI.RESET}
 
 ${ANSI.BOLD}USAGE:${ANSI.RESET}
-  lyrical [command] [options] [query]
+  resonate [command] [options] [query]
 
 ${ANSI.BOLD}COMMANDS:${ANSI.RESET}
-  ${colorText('lyrical', [255, 215, 0])}                          Launch TUI player (opens live search)
-  ${colorText('lyrical play <query|url|id>', [255, 215, 0])}     Search & immediately play a song or video URL
-  ${colorText('lyrical search [query]', [255, 215, 0])}          Open TUI search with dropdown suggestions
-  ${colorText('lyrical playlist [list|show|play]', [255, 215, 0])} Browse playlists (TUI if no subcommand)
-  ${colorText('lyrical library', [255, 215, 0])}                 Open library / Liked Songs TUI
-  ${colorText('lyrical charts / explore', [255, 215, 0])}        Open Top Charts & Trending TUI
-  ${colorText('lyrical auth <login|status|logout>', [255, 215, 0])} Manage YouTube Music authentication
-  ${colorText('lyrical get <query>', [255, 215, 0])}             Dump synchronized LRC lyrics to stdout
-  ${colorText('lyrical themes', [255, 215, 0])}                  List all available TrueColor themes
+  ${colorText('resonate', [255, 215, 0])}                          Launch TUI player (opens live search)
+  ${colorText('resonate play <query|url|id>', [255, 215, 0])}     Search & immediately play a song or video URL
+  ${colorText('resonate search [query]', [255, 215, 0])}          Open TUI search with dropdown suggestions
+  ${colorText('resonate playlist [list|show|play]', [255, 215, 0])} Browse playlists (TUI if no subcommand)
+  ${colorText('resonate library', [255, 215, 0])}                 Open library / Liked Songs TUI
+  ${colorText('resonate charts / explore', [255, 215, 0])}        Open Top Charts & Trending TUI
+  ${colorText('resonate auth <login|status|logout>', [255, 215, 0])} Manage YouTube Music authentication
+  ${colorText('resonate get <query>', [255, 215, 0])}             Dump synchronized LRC lyrics to stdout
+  ${colorText('resonate themes', [255, 215, 0])}                  List all available TrueColor themes
 
 ${ANSI.BOLD}OPTIONS:${ANSI.RESET}
   ${colorText('--theme, -t <name>', [30, 215, 96])}          Set visual theme (ytmusic, spotify, cyberpunk, nord, tokyonight, etc.)
@@ -561,7 +559,6 @@ ${ANSI.BOLD}OPTIONS:${ANSI.RESET}
   ${colorText('--browser <name>', [30, 215, 96])}            Browser for cookie import (chrome, firefox, brave, edge)
   ${colorText('--help, -h', [30, 215, 96])}                  Show this help message
   ${colorText('--version, -v', [30, 215, 96])}               Show version
-
 ${ANSI.BOLD}SEARCH TUI:${ANSI.RESET}
   ${colorText('Type', [255, 215, 0])}         Filter live results; typed text appears in the search field
   ${colorText('↑ / ↓', [255, 215, 0])}        Move through suggestions and results

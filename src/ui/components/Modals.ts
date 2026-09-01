@@ -183,7 +183,7 @@ export function renderPlaylistModal(
   const endIdx = Math.min(playlists.length, startIdx + listH);
 
   if (playlists.length === 0) {
-    contentLines.push(colorText(' No playlists found. Sign in via `lyrical auth login` to view your library.', theme.dimmed));
+    contentLines.push(colorText(' No playlists found. Sign in via `resonate auth login` to view your library.', theme.dimmed));
   } else {
     for (let i = startIdx; i < endIdx; i++) {
       const pl = playlists[i];
@@ -340,13 +340,13 @@ export function renderAuthModal(
     contentLines.push(` Status: ${premBadge}`);
     contentLines.push(` High-bitrate Premium Playback: ${isPremium ? colorText('Enabled (256kbps)', [30, 215, 96]) : colorText('Standard', theme.dimmed)}`);
     contentLines.push('');
-    contentLines.push(colorText(' Commands: `lyrical auth status`, `lyrical auth logout`', theme.subtle));
+    contentLines.push(colorText(' Commands: `resonate auth status`, `resonate auth logout`', theme.subtle));
   } else {
     contentLines.push(colorText(' You are currently not signed in to YouTube Music.', theme.dimmed));
     contentLines.push('');
     contentLines.push(' To sign in with your YouTube Music or Premium account:');
-    contentLines.push(`  ${colorText('1.', theme.accent)} Run ${ANSI.BOLD}lyrical auth login${ANSI.RESET} in your terminal.`);
-    contentLines.push(`  ${colorText('2.', theme.accent)} Or import browser cookies via ${ANSI.BOLD}lyrical auth login --browser chrome${ANSI.RESET}.`);
+    contentLines.push(`  ${colorText('1.', theme.accent)} Run ${ANSI.BOLD}resonate auth login${ANSI.RESET} in your terminal.`);
+    contentLines.push(`  ${colorText('2.', theme.accent)} Or import browser cookies via ${ANSI.BOLD}resonate auth login --browser chrome${ANSI.RESET}.`);
   }
 
   if (statusMsg) {

@@ -1,17 +1,18 @@
 {
-  "name": "lyrical-cli",
+  "name": "resonate-cli",
   "version": "1.0.0",
-  "description": "A stunning terminal lyrics player with synchronized karaoke, procedural visualizers, album art, and truecolor themes",
+  "description": "Terminal YouTube Music player with synchronized lyrics, procedural visualizers, album art, and truecolor themes",
   "main": "dist/index.js",
   "bin": {
-    "lyrical": "bin/lyrical.js"
+    "resonate": "bin/resonate.js",
+    "lyrical": "bin/resonate.js"
   },
   "type": "module",
   "scripts": {
     "build": "tsc",
     "start": "bun dist/index.js",
     "dev": "bun run src/index.ts",
-    "test": "bun test test/lyrical.test.ts"
+    "test": "bun test"
   },
   "keywords": [
     "lyrics",
@@ -23,7 +24,7 @@
     "visualizer",
     "cli"
   ],
-  "author": "Lyrical Team",
+  "author": "aman-senpai",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",

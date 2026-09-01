@@ -7,8 +7,8 @@ set -e
 # ==============================================================================
 
 REPO="aman-senpai/resonate"
-INSTALL_DIR="${LYRICAL_INSTALL_DIR:-$HOME/.local/bin}"
-BIN_NAME="lyrical"
+INSTALL_DIR="${RESONATE_INSTALL_DIR:-$HOME/.local/bin}"
+BIN_NAME="resonate"
 
 # Colors
 RED='\033[0;31m'
@@ -20,7 +20,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 echo -e "${CYAN}${BOLD}"
-echo "  ♫  LYRICAL - YouTube Music Terminal Player & Lyrics CLI  ♫"
+echo "  RESONATE - YouTube Music Terminal Player & Lyrics CLI"
 echo -e "${NC}"
 
 # 1. Detect OS and Architecture
@@ -81,19 +81,17 @@ fi
 # 5. Download or build standalone binary
 TARGET_BIN="$INSTALL_DIR/$BIN_NAME"
 
-# Check if local build exists or if we should fetch from GitHub Releases
-if [ -f "./bin/lyrical-standalone" ]; then
+if [ -f "./bin/resonate-standalone" ]; then
   echo -e "${BLUE}==>${NC} Installing local standalone build..."
-  cp ./bin/lyrical-standalone "$TARGET_BIN"
+  cp ./bin/resonate-standalone "$TARGET_BIN"
 elif command -v bun >/dev/null 2>&1 && [ -f "./src/index.ts" ]; then
   echo -e "${BLUE}==>${NC} Compiling standalone binary with Bun..."
   bun build --compile ./src/index.ts --outfile "$TARGET_BIN"
 else
-  echo -e "${BLUE}==>${NC} Downloading latest lyrical binary for $TARGET..."
-  DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/lyrical-${TARGET}"
+  echo -e "${BLUE}==>${NC} Downloading latest resonate binary for $TARGET..."
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/resonate-${TARGET}"
   
   if ! curl -fsSL "$DOWNLOAD_URL" -o "$TARGET_BIN" 2>/dev/null; then
-    # Fallback to source install using Bun if release binary is not yet published
     echo -e "${YELLOW}==>${NC} Release binary not found online. Installing via Bun..."
     if ! command -v bun >/dev/null 2>&1; then
       echo -e "${BLUE}==>${NC} Installing Bun runtime..."
@@ -110,6 +108,7 @@ else
 fi
 
 chmod +x "$TARGET_BIN"
+ln -sf "$TARGET_BIN" "$INSTALL_DIR/lyrical" 2>/dev/null || true
 
 # 6. Check PATH
 case ":$PATH:" in
@@ -130,6 +129,6 @@ case ":$PATH:" in
 esac
 
 echo ""
-echo -e "${GREEN}${BOLD}✔ Successfully installed Lyrical!${NC}"
-echo -e "Run ${CYAN}${BOLD}lyrical${NC} to start playing music in your terminal."
+echo -e "${GREEN}${BOLD}Successfully installed Resonate!${NC}"
+echo -e "Run ${CYAN}${BOLD}resonate${NC} to start playing music in your terminal."
 echo ""

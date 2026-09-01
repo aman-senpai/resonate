@@ -27,9 +27,7 @@ interface LrclibGetItem {
   syncedLyrics?: string;
   plainLyrics?: string;
 }
-
-const CACHE_DIR = path.join(os.homedir(), '.config', 'lyrical', 'songs');
-
+const CACHE_DIR = path.join(os.homedir(), '.config', 'resonate', 'songs');
 function ensureCacheDir(): void {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -83,7 +81,7 @@ async function searchLrclib(query: string): Promise<SearchResult[]> {
     const response = await fetch(`https://lrclib.net/api/search?q=${encoded}`, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Lyrical-CLI/1.0 (https://github.com/lyrical/lyrical)',
+        'User-Agent': 'Resonate-CLI/1.0 (https://github.com/aman-senpai/resonate)',
       },
     });
     clearTimeout(timeoutId);
@@ -127,7 +125,7 @@ export async function fetchSongDetails(result: SearchResult): Promise<Song | nul
       const cleanTitle = result.title.replace(/\(Official.+?\)|\[Official.+?\]|\(Lyrics\)|\[Lyrics\]/gi, '').trim();
       const lrclibRes = await fetch(
         `https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(cleanArtist)}`,
-        { headers: { 'User-Agent': 'Lyrical-CLI/1.0' }, signal: AbortSignal.timeout(4000) }
+        { headers: { 'User-Agent': 'Resonate-CLI/1.0' }, signal: AbortSignal.timeout(4000) }
       );
       if (lrclibRes.ok) {
         const lrcData = (await lrclibRes.json()) as LrclibGetItem;
@@ -201,7 +199,7 @@ export async function fetchSongDetails(result: SearchResult): Promise<Song | nul
     const response = await fetch(`https://lrclib.net/api/get/${result.id}`, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Lyrical-CLI/1.0',
+        'User-Agent': 'Resonate-CLI/1.0',
       },
     });
     clearTimeout(timeoutId);

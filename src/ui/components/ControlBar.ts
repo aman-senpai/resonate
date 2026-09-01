@@ -52,15 +52,16 @@ export function renderControlBar(opts: ControlBarOptions): string[] {
   lines.push(`${bFg}│${reset}${safeProgressRow}${' '.repeat(padProgress)}${bFg}│${reset}`);
 
   // Row 2: Status Badges (Speed, Offset, Loop, Visualizer, Volume, Backend)
-  const speedBadge = colorText(`⚡ ${state.speed.toFixed(2)}x`, theme.primary);
-  const offsetSign = state.offsetMs >= 0 ? '+' : '';
-  const offsetBadge = colorText(`⏱ ${offsetSign}${(state.offsetMs / 1000).toFixed(1)}s`, state.offsetMs !== 0 ? theme.accent : theme.subtle);
+  const speed = typeof state.speed === 'number' ? state.speed : 1.0;
+  const speedBadge = colorText(`SPD: ${speed.toFixed(2)}x`, theme.primary);
+  const offset = state.offsetMs ?? 0;
+  const offsetSign = offset >= 0 ? '+' : '';
+  const offsetBadge = colorText(`SYNC: ${offsetSign}${(offset / 1000).toFixed(1)}s`, offset !== 0 ? theme.accent : theme.subtle);
   const loopBadge = state.loop ? colorText('LOOP: ON', theme.accent, true) : colorText('LOOP: OFF', theme.subtle);
   const vizBadge = colorText(`VIZ: ${visualizerType.toUpperCase()}`, theme.secondary);
   const volBadge = colorText(`VOL: ${state.volume}%`, theme.accent);
-  const backendBadge = colorText(`♫ ${state.backend || 'Audio'}`, theme.dimmed);
+  const backendBadge = colorText(`AUDIO: ${state.backend || 'Native'}`, theme.dimmed);
   const timeToggleBadge = showTimestamps ? colorText('TIME: ON', theme.accent) : colorText('TIME: OFF', theme.subtle);
-
   const statusItems = [speedBadge, offsetBadge, loopBadge, vizBadge, volBadge, backendBadge, timeToggleBadge];
   let statusLineLeft = `  ${statusItems.join('  │  ')}`;
   if (getVisualWidth(statusLineLeft) > innerWidth) {

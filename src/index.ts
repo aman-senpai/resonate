@@ -15,6 +15,6 @@ import { runCli } from './cli.js';
 
 // Auto-run if executed as main entry
 runCli(process.argv.slice(2)).catch((err) => {
-  console.error('Lyrical error:', err);
+  console.error('Resonate error:', err);
   process.exit(1);
 });

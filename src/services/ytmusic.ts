@@ -15,7 +15,7 @@ let innertubeInstance: Innertube | null = null;
 let isInitializing: boolean = false;
 let initPromise: Promise<Innertube> | null = null;
 
-const CACHE_DIR = path.join(os.homedir(), '.config', 'lyrical', 'cache');
+const CACHE_DIR = path.join(os.homedir(), '.config', 'resonate', 'cache');
 
 export async function getYtMusicClient(): Promise<Innertube> {
   if (innertubeInstance) return innertubeInstance;

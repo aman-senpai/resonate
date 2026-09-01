@@ -4,7 +4,7 @@ export const THEMES: Record<string, Theme> = {
   cyberpunk: {
     id: 'cyberpunk',
     name: 'Cyberpunk Neon',
-    icon: '⚡',
+    icon: '✦',
     description: 'Electric neon cyan, hot pink and high-voltage yellow',
     primary: [0, 240, 255], // #00F0FF Electric Cyan
     secondary: [255, 0, 127], // #FF007F Hot Pink

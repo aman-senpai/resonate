@@ -4,7 +4,7 @@ node_modules/
 # Build artifacts
 dist/
 dist-bin/
-bin/lyrical-standalone
+bin/*-standalone
 
 # Local user cache and config
 .config/

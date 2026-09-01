@@ -18,7 +18,7 @@ export function renderHeader(opts: HeaderOptions): string[] {
   const innerWidth = Math.max(10, width - 2);
 
   // Top border with App Logo and ViewMode
-  const logo = ` ♫ LYRICAL YT MUSIC `;
+  const logo = ` RESONATE `;
   const modeBadge = ` [${viewMode.toUpperCase()}] `;
   const logoWidth = getVisualWidth(logo);
   const modeWidth = getVisualWidth(modeBadge);

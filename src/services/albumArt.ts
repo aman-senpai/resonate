@@ -6,7 +6,7 @@ import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import { RGB } from '../types.js';
 
-const CACHE_DIR = path.join(os.homedir(), '.config', 'lyrical', 'art-cache');
+const CACHE_DIR = path.join(os.homedir(), '.config', 'resonate', 'art-cache');
 
 interface DecodedImage {
   width: number;
