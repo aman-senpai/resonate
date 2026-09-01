@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+dist-bin/
+bin/lyrical-standalone
+
+# Local user cache and config
+.config/
+.cache/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

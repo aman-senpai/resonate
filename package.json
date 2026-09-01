@@ -1,0 +1,41 @@
+{
+  "name": "lyrical-cli",
+  "version": "1.0.0",
+  "description": "A stunning terminal lyrics player with synchronized karaoke, procedural visualizers, album art, and truecolor themes",
+  "main": "dist/index.js",
+  "bin": {
+    "lyrical": "bin/lyrical.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "bun dist/index.js",
+    "dev": "bun run src/index.ts",
+    "test": "bun test test/lyrical.test.ts"
+  },
+  "keywords": [
+    "lyrics",
+    "karaoke",
+    "terminal",
+    "tui",
+    "lrc",
+    "music",
+    "visualizer",
+    "cli"
+  ],
+  "author": "Lyrical Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@types/pngjs": "^6.0.5",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "youtubei.js": "^18.0.0"
+  }
+}

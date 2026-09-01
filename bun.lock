@@ -1,0 +1,40 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "lyrical-cli",
+      "dependencies": {
+        "@types/pngjs": "^6.0.5",
+        "jpeg-js": "^0.4.4",
+        "pngjs": "^7.0.0",
+        "youtubei.js": "^18.0.0",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.3",
+      },
+    },
+  },
+  "packages": {
+    "@bufbuild/protobuf": ["@bufbuild/protobuf@2.14.0", "", {}, "sha512-C3UGsiCwSprE2NKIIFA3hCDlpXTMCAXRZuEVp88L1GY36Y41+rYL5fryE+nOFhp4p4JPQvdV8PQ4DWgHgeTE+w=="],
+
+    "@types/node": ["@types/node@22.20.1", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q=="],
+
+    "@types/pngjs": ["@types/pngjs@6.0.5", "", { "dependencies": { "@types/node": "*" } }, "sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ=="],
+
+    "fflate": ["fflate@0.8.3", "", {}, "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="],
+
+    "jpeg-js": ["jpeg-js@0.4.4", "", {}, "sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg=="],
+
+    "meriyah": ["meriyah@7.3.2", "", {}, "sha512-uFPXbsoxaEd7PafMz3K/n/Z3kXz7iZBJtYU0VQB/kcV7i33+JghLTKweabLir480FUsyLz6gUIj4LW7kCQ35TA=="],
+
+    "pngjs": ["pngjs@7.0.0", "", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "youtubei.js": ["youtubei.js@18.0.0", "", { "dependencies": { "@bufbuild/protobuf": "^2.0.0", "fflate": "^0.8.2", "meriyah": "^7.3.1" } }, "sha512-7Tztl5QzNL4nIhiAxa4P/0C8cDDsUe0j4iaUeNiaA+ZfSe/l+HkHxXyoWlQXNW7IPi2n6AW23ysVMJLDh+AwWQ=="],
+  }
+}
