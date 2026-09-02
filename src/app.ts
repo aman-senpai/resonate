@@ -220,7 +220,7 @@ export class LyricalApp {
     this.render();
 
     this.player.play().catch(() => {});
-    void upgradeLegacyDownloads(this.player.getCurrentSong()).then((n) => {
+    void upgradeLegacyDownloads().then((n) => {
       if (n > 0) this.showNotification(`Upgraded ${n} offline song${n === 1 ? '' : 's'}`, 2500);
     });
   }
