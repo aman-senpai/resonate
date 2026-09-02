@@ -232,8 +232,10 @@ export class LyricPlayer extends EventEmitter {
   public setSpeed(speed: number): void {
     this.speed = Math.max(0.25, Math.min(3.0, speed));
     this.lastHighResTimestamp = performance.now();
+    this.backend.setSpeed(this.speed);
     this.emitStateChange();
   }
+
 
   public adjustSpeed(delta: number): void {
     const newSpeed = Math.round((this.speed + delta) * 100) / 100;

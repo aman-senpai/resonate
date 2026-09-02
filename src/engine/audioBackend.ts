@@ -16,10 +16,12 @@ export interface IAudioBackend {
   resume(): void;
   seek(targetMs: number): void;
   setVolume(vol: number): void;
+  setSpeed(speed: number): void;
   stop(): void;
   destroy(): void;
   getName(): string;
 }
+
 
 export type PlayerKind =
   | 'ffplay'
@@ -100,6 +102,27 @@ function volumeFilter(vol: number): string {
   return `volume=${linear.toFixed(3)}`;
 }
 
+export function atempoFilters(speed: number): string[] {
+  let remaining = Math.max(0.25, Math.min(3, speed));
+  if (Math.abs(remaining - 1) < 0.001) return [];
+  const parts: string[] = [];
+  while (remaining > 2.0001) {
+    parts.push('atempo=2.0');
+    remaining /= 2;
+  }
+  while (remaining < 0.4999) {
+    parts.push('atempo=0.5');
+    remaining *= 2;
+  }
+  parts.push(`atempo=${remaining.toFixed(4)}`);
+  return parts;
+}
+
+function ffmpegAudioFilter(vol: number, speed: number): string {
+  return [volumeFilter(vol), ...atempoFilters(speed)].join(',');
+}
+
+
 const PLAYER_APP_NAMES: Record<string, true> = {
   ffplay: true,
   mpv: true,
@@ -173,7 +196,6 @@ function setPulseVolume(pid: number | null, vol: number): boolean {
       block.includes('application.name = "pw-play"') ||
       block.includes('node.name = "ffplay"') ||
       block.includes('node.name = "paplay"');
-
     const pidHit = pid != null && block.includes(`application.process.id = "${pid}"`);
     if (!named && !pidHit) continue;
     const id = parseInt(block, 10);
@@ -189,6 +211,7 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
   private currentMs: number = 0;
   private status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
   private volume: number = 100;
+  private speed: number = 1;
   private lastTime: number = 0;
 
   public async play(_url: string, startMs: number = 0): Promise<void> {
@@ -221,6 +244,10 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
     this.volume = Math.max(0, Math.min(150, vol));
   }
 
+  public setSpeed(speed: number): void {
+    this.speed = Math.max(0.25, Math.min(3, speed));
+  }
+
   public stop(): void {
     this.status = 'stopped';
     this.currentMs = 0;
@@ -244,7 +271,7 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
       const elapsed = now - this.lastTime;
       this.lastTime = now;
       if (this.status === 'playing') {
-        this.currentMs += elapsed;
+        this.currentMs += elapsed * this.speed;
         this.emit('status', { status: this.status, currentMs: this.currentMs, volume: this.volume });
       }
     }, 40);
@@ -258,6 +285,7 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
   }
 }
 
+
 export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private proc: ChildProcess | null = null;
   private sinkProc: ChildProcess | null = null;
@@ -265,8 +293,10 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   public currentMs: number = 0;
   public status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
   public currentVolume: number = 100;
+  private playbackSpeed: number = 1;
   private timer: NodeJS.Timeout | null = null;
   private lastTime: number = 0;
+
   private currentTarget: string = '';
   private currentStreamUrl: string = '';
   private playSessionId: number = 0;
@@ -324,9 +354,12 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private playerArgs(streamUrl: string, startMs: number, kind: PlayerKind): string[] {
     const startSec = startMs > 0 ? (startMs / 1000).toFixed(3) : '0';
     const vol = Math.max(0, Math.min(100, this.currentVolume));
+    const speed = this.playbackSpeed;
 
     if (kind === 'ffplay') {
       const args = ['-nodisp', '-autoexit', '-loglevel', 'error', '-volume', String(vol)];
+      const tempo = atempoFilters(speed);
+      if (tempo.length > 0) args.push('-af', tempo.join(','));
       if (startMs > 0) args.push('-ss', startSec);
       args.push('-i', streamUrl);
       return args;
@@ -338,6 +371,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         '--really-quiet',
         '--no-terminal',
         `--volume=${vol}`,
+        `--speed=${speed.toFixed(2)}`,
         `--start=${startSec}`,
         streamUrl,
       ];
@@ -351,6 +385,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       '-reconnect_delay_max', '5',
     ];
     if (startMs > 0) common.push('-ss', startSec);
+    const af = ffmpegAudioFilter(this.currentVolume, speed);
 
     if (kind === 'ffmpeg-paplay' || kind === 'ffmpeg-pwplay') {
       return [
@@ -359,15 +394,16 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         '-vn',
         '-ac', '2',
         '-ar', '44100',
-        '-af', volumeFilter(this.currentVolume),
+        '-af', af,
         '-f', 'wav',
         'pipe:1',
       ];
     }
 
     const outFmt = kind === 'ffmpeg-alsa' ? 'alsa' : kind === 'ffmpeg-coreaudio' ? 'coreaudio' : 'pulse';
-    return [...common, '-i', streamUrl, '-vn', '-af', volumeFilter(this.currentVolume), '-f', outFmt, 'default'];
+    return [...common, '-i', streamUrl, '-vn', '-af', af, '-f', outFmt, 'default'];
   }
+
 
   private isPiped(): boolean {
     return this.spec?.kind === 'ffmpeg-paplay' || this.spec?.kind === 'ffmpeg-pwplay';
@@ -657,6 +693,23 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       this.scheduleVolumeApply();
     }
   }
+  public setSpeed(speed: number): void {
+    const next = Math.max(0.25, Math.min(3, speed));
+    if (Math.abs(next - this.playbackSpeed) < 0.001) return;
+    this.playbackSpeed = next;
+    if (this.status !== 'playing' || !this.spec || !this.currentStreamUrl) return;
+    const sessionId = ++this.playSessionId;
+    const pos = this.currentMs;
+    void this.spawnPlayer(this.currentStreamUrl, pos, sessionId)
+      .then(() => {
+        if (sessionId !== this.playSessionId) return;
+        this.currentMs = pos;
+        this.lastTime = Date.now();
+        this.startClock();
+      })
+      .catch(() => {});
+  }
+
 
 
   public stop(): void {
@@ -748,7 +801,8 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       const elapsed = now - this.lastTime;
       this.lastTime = now;
       if (this.status === 'playing') {
-        this.currentMs += elapsed;
+        this.currentMs += elapsed * this.playbackSpeed;
+
         this.emit('status', {
           status: this.status,
           currentMs: this.currentMs,

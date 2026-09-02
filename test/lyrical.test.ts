@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { parseLrc, parseTimestampToMs, formatMsToTime, createSongFromText } from '../src/parser/lrc.js';
 import { LyricPlayer } from '../src/engine/player.js';
-import { createAudioBackend, muxerEnabled, pickPlayerKind, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+import { atempoFilters, createAudioBackend, muxerEnabled, pickPlayerKind, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+
 
 import { AudioVisualizer } from '../src/engine/visualizer.js';
 import { THEMES, ThemeManager } from '../src/ui/themes.js';
@@ -785,6 +786,25 @@ describe('Audio engine selection', () => {
     assert.strictEqual(muxerEnabled(staticListing, 'alsa'), true);
   });
 });
+
+describe('Playback speed audio filters', () => {
+  it('skips atempo at 1x and chains outside 0.5-2', () => {
+    assert.deepStrictEqual(atempoFilters(1), []);
+    assert.deepStrictEqual(atempoFilters(1.25), ['atempo=1.2500']);
+    assert.deepStrictEqual(atempoFilters(0.75), ['atempo=0.7500']);
+    assert.deepStrictEqual(atempoFilters(2.5), ['atempo=2.0', 'atempo=1.2500']);
+    assert.deepStrictEqual(atempoFilters(0.25), ['atempo=0.5', 'atempo=0.5000']);
+  });
+
+  it('forwards speed to the audio backend', () => {
+    const backend = new SimulatedAudioBackend();
+    const player = new LyricPlayer(globalSong, backend);
+    player.setSpeed(1.5);
+    assert.strictEqual(player.getState().speed, 1.5);
+    player.destroy();
+  });
+});
+
 
 
 describe('Loop Shuffle Mute Speed Controls', () => {
