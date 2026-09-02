@@ -13,16 +13,28 @@ import { SimulatedAudioBackend } from '../src/engine/audioBackend.js';
 import { stripAnsi } from '../src/ui/renderer.js';
 import { formatStorageLimit, getConfig, parseStorageBytes, resetConfigCache, saveConfig } from '../src/services/config.js';
 import {
+  cleanVideoTitle,
+  convertToTaggedMp3,
   deleteAllDownloadedSongs,
   deleteDownloadedSong,
+  downloadBasename,
   findDownloadedMatch,
   formatBytes,
   getDownloadedCount,
   getDownloadedSongs,
   resetDownloadsState,
+  resolveDownloadMetadata,
+  sanitizeFilename,
   toPlayableSong,
+  uniqueDownloadPath,
+  upgradeThumbnailUrl,
   upsertDownloadedSong,
 } from '../src/services/downloadManager.js';
+import { findExecutable } from '../src/services/auth.js';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'resonate-dl-'));
 process.env.RESONATE_CONFIG_DIR = tmp;
@@ -179,5 +191,88 @@ describe('Offline downloads library', () => {
     seam.handleKey({ name: 'd' }, 'd');
     seam.handleKey({ name: 'y' }, 'y');
     assert.strictEqual(getDownloadedCount(), 0);
+  });
+});
+
+describe('Download filenames and metadata', () => {
+  it('builds a readable Artist - Title filename', () => {
+    assert.strictEqual(sanitizeFilename('Night/Changes: (Live)?'), 'Night Changes (Live)');
+    assert.strictEqual(downloadBasename('One Direction', 'Night Changes'), 'One Direction - Night Changes');
+    assert.strictEqual(downloadBasename('', 'Night Changes'), 'Night Changes');
+    assert.strictEqual(cleanVideoTitle('Night Changes (Official Video)'), 'Night Changes');
+  });
+
+  it('avoids colliding filenames with a video id suffix', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resonate-name-'));
+    fs.writeFileSync(path.join(dir, 'One Direction - Night Changes.mp3'), 'x');
+    const next = uniqueDownloadPath(dir, 'One Direction - Night Changes', 'mp3', 'abcde123456');
+    assert.strictEqual(path.basename(next), 'One Direction - Night Changes [abcde123456].mp3');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('upgrades tiny YouTube and Google thumbnail URLs', () => {
+    assert.ok(upgradeThumbnailUrl('https://i.ytimg.com/vi/abcde123456/hqdefault.jpg').includes('maxresdefault'));
+    assert.ok(upgradeThumbnailUrl('https://lh3.googleusercontent.com/x=w60-h60-p-l90-rj').includes('w600-h600'));
+  });
+
+  it('prefers YT Music title and fills gaps from yt-dlp info', () => {
+    const tagged = resolveDownloadMetadata({
+      id: 'abcde123456',
+      title: 'Night Changes',
+      artist: 'One Direction',
+      album: 'Four',
+      year: 2014,
+    }, { title: 'Night Changes (Official Video)', artist: 'Other' });
+    assert.strictEqual(tagged.title, 'Night Changes');
+    assert.strictEqual(tagged.artist, 'One Direction');
+    assert.strictEqual(tagged.album, 'Four');
+    assert.strictEqual(tagged.year, '2014');
+
+    const fromInfo = resolveDownloadMetadata({
+      id: 'abcde123456',
+      title: 'abcde123456',
+      artist: 'Unknown Artist',
+    }, {
+      track: 'Steal My Girl',
+      artist: 'One Direction',
+      album: 'Four',
+      upload_date: '20141008',
+    });
+    assert.strictEqual(fromInfo.title, 'Steal My Girl');
+    assert.strictEqual(fromInfo.artist, 'One Direction');
+    assert.strictEqual(fromInfo.album, 'Four');
+    assert.strictEqual(fromInfo.year, '2014');
+  });
+
+  it('converts audio to a tagged MP3 with album art', async () => {
+    const ffmpeg = findExecutable('ffmpeg');
+    if (!ffmpeg) return;
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resonate-mp3-'));
+    const wav = path.join(dir, 'src.wav');
+    const cover = path.join(dir, 'cover.jpg');
+    const dest = path.join(dir, 'One Direction - Night Changes.mp3');
+    await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.25', '-y', wav], { timeout: 20000 });
+    await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=1', '-frames:v', '1', '-y', cover], { timeout: 20000 });
+
+    const ok = await convertToTaggedMp3({
+      srcFile: wav,
+      destFile: dest,
+      title: 'Night Changes',
+      artist: 'One Direction',
+      album: 'Four',
+      year: '2014',
+      coverFile: cover,
+    });
+    assert.strictEqual(ok, true);
+    const buf = fs.readFileSync(dest);
+    assert.ok(buf.length > 100);
+    assert.strictEqual(buf.subarray(0, 3).toString('ascii'), 'ID3');
+    const compact = Buffer.from(buf.filter((b) => b !== 0)).toString('latin1');
+    assert.ok(compact.includes('Night Changes'));
+    assert.ok(compact.includes('One Direction'));
+    assert.ok(compact.includes('Four'));
+    assert.ok(compact.includes('APIC') || buf.includes(Buffer.from([0xff, 0xd8, 0xff])));
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

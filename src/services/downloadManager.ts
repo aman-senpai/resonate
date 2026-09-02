@@ -14,6 +14,14 @@ let index: Record<string, DownloadedSong> = {};
 let loaded = false;
 const activeDownloads: Record<string, Promise<DownloadedSong | null>> = {};
 
+const IMAGE_EXTS: Record<string, true> = {
+  '.jpg': true,
+  '.jpeg': true,
+  '.png': true,
+  '.webp': true,
+  '.image': true,
+};
+
 function getDownloadsDir(): string {
   return path.join(getConfigDir(), 'downloads');
 }
@@ -245,6 +253,287 @@ function evictToStorageLimit(keepId?: string): void {
   }
 }
 
+export function sanitizeFilename(name: string): string {
+  const cleaned = (name || '')
+    .replace(/[/\\]/g, ' ')
+    .replace(/[\u0000-\u001f<>:"|?*]/g, '')
+    .replace(/[\u2028\u2029]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[. ]+|[. ]+$/g, '')
+    .trim();
+  const sliced = cleaned.slice(0, 180);
+  if (!sliced || sliced === '.' || sliced === '..') return 'Unknown';
+  return sliced;
+}
+
+export function downloadBasename(artist: string, title: string): string {
+  const a = sanitizeFilename(artist);
+  const t = sanitizeFilename(title);
+  const artistOk = a && a !== 'Unknown';
+  const titleOk = t && t !== 'Unknown';
+  if (artistOk && titleOk) return `${a} - ${t}`;
+  if (titleOk) return t;
+  if (artistOk) return a;
+  return 'Unknown Track';
+}
+
+export function uniqueDownloadPath(dir: string, basename: string, ext: string, id?: string): string {
+  const e = ext.replace(/^\./, '');
+  const primary = path.join(dir, `${basename}.${e}`);
+  if (!fs.existsSync(primary)) return primary;
+  if (id) return path.join(dir, `${basename} [${sanitizeFilename(id)}].${e}`);
+  let n = 2;
+  while (fs.existsSync(path.join(dir, `${basename} (${n}).${e}`))) n += 1;
+  return path.join(dir, `${basename} (${n}).${e}`);
+}
+
+export function upgradeThumbnailUrl(url: string): string {
+  if (!url) return url;
+  return url
+    .replace(/\/vi\/([^/]+)\/(default|mqdefault|hqdefault|sddefault)\./, '/vi/$1/maxresdefault.')
+    .replace(/=w\d+-h\d+/gi, '=w600-h600')
+    .replace(/=s\d+/gi, '=s600');
+}
+
+export function cleanVideoTitle(title: string): string {
+  return (title || '')
+    .replace(/\s*[([【]\s*(official\s*)?(music\s*)?(hd\s*)?(lyric\s*)?(video|audio|visualizer|mv)(\s*\d+)?\s*[)\]】]/gi, '')
+    .replace(/\s*[([【]\s*(lyrics|audio|visualizer|official)\s*[)\]】]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function asMetaString(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) return value.map(asMetaString).filter(Boolean).join(', ');
+  return '';
+}
+
+export function resolveDownloadMetadata(
+  song: Pick<Song, 'title' | 'artist' | 'album' | 'year' | 'id'>,
+  info?: Record<string, unknown> | null
+): { title: string; artist: string; album?: string; year?: string } {
+  const infoTitle = cleanVideoTitle(asMetaString(info?.track) || asMetaString(info?.title));
+  const infoArtist =
+    asMetaString(info?.artist) ||
+    asMetaString(info?.album_artist) ||
+    asMetaString(info?.uploader) ||
+    asMetaString(info?.channel);
+  const infoAlbum = asMetaString(info?.album);
+  let infoYear: string | undefined;
+  if (info) {
+    const y = info.release_year;
+    if (typeof y === 'number' && y > 1900) infoYear = String(y);
+    else {
+      for (const key of ['release_date', 'upload_date']) {
+        const v = info[key];
+        if (typeof v === 'string' && /^\d{4}/.test(v)) {
+          infoYear = v.slice(0, 4);
+          break;
+        }
+      }
+    }
+  }
+
+  const rawTitle = (song.title || '').trim();
+  const genericTitle =
+    !rawTitle ||
+    /^unknown(\s+title)?$/i.test(rawTitle) ||
+    rawTitle === song.id ||
+    /^[a-zA-Z0-9_-]{11}$/.test(rawTitle);
+  const rawArtist = (song.artist || '').trim();
+  const genericArtist = !rawArtist || /^unknown(\s+artist)?$/i.test(rawArtist);
+
+  const title = genericTitle ? infoTitle || song.title || 'Unknown Title' : song.title;
+  const artist = genericArtist ? infoArtist || song.artist || 'Unknown Artist' : song.artist;
+  const album = (song.album && song.album.trim()) || infoAlbum || undefined;
+  const year = song.year != null && String(song.year).trim() ? String(song.year) : infoYear;
+  return { title, artist, album, year };
+}
+
+function unlinkQuiet(filePath: string): void {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch {
+    // ignore
+  }
+}
+
+function cleanupStaging(dir: string, id: string): void {
+  const prefix = `_tmp_${id}`;
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (name === prefix || name.startsWith(`${prefix}.`)) {
+        unlinkQuiet(path.join(dir, name));
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function imageExtension(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return '.jpg';
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return '.png';
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return '.webp';
+  return null;
+}
+
+function readInfoJson(filePath: string): Record<string, unknown> | null {
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!raw || typeof raw !== 'object') return null;
+    return raw as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function metaArg(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ').trim();
+}
+
+function metadataArgs(meta: { title: string; artist: string; album?: string; year?: string }): string[] {
+  const args = ['-map_metadata', '-1', '-id3v2_version', '3', '-write_id3v1', '1'];
+  if (meta.title) args.push('-metadata', `title=${metaArg(meta.title)}`);
+  if (meta.artist) {
+    args.push('-metadata', `artist=${metaArg(meta.artist)}`);
+    args.push('-metadata', `album_artist=${metaArg(meta.artist)}`);
+  }
+  if (meta.album) args.push('-metadata', `album=${metaArg(meta.album)}`);
+  if (meta.year) args.push('-metadata', `date=${metaArg(meta.year)}`);
+  return args;
+}
+
+export async function convertToTaggedMp3(opts: {
+  srcFile: string;
+  destFile: string;
+  title: string;
+  artist: string;
+  album?: string;
+  year?: string;
+  coverFile?: string;
+}): Promise<boolean> {
+  const ffmpeg = findExecutable('ffmpeg');
+  if (!ffmpeg) return false;
+
+  const tags = metadataArgs(opts);
+  const attempts: string[][] = [];
+  if (opts.coverFile) {
+    attempts.push([
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      opts.srcFile,
+      '-i',
+      opts.coverFile,
+      '-map',
+      '0:a:0',
+      '-map',
+      '1:0',
+      '-c:a',
+      'libmp3lame',
+      '-q:a',
+      '2',
+      '-c:v',
+      'mjpeg',
+      '-disposition:v',
+      'attached_pic',
+      ...tags,
+      opts.destFile,
+    ]);
+  }
+  attempts.push([
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-vn',
+    '-i',
+    opts.srcFile,
+    '-map',
+    '0:a:0',
+    '-c:a',
+    'libmp3lame',
+    '-q:a',
+    '2',
+    ...tags,
+    opts.destFile,
+  ]);
+
+  for (const args of attempts) {
+    try {
+      await execFileAsync(ffmpeg, args, { timeout: 300000 });
+      if (fs.existsSync(opts.destFile) && fs.statSync(opts.destFile).size > 0) return true;
+    } catch {
+      unlinkQuiet(opts.destFile);
+    }
+  }
+  return false;
+}
+
+async function fetchCoverFile(url: string | undefined, destBase: string): Promise<string | undefined> {
+  if (!url) return undefined;
+  const candidates = [upgradeThumbnailUrl(url)];
+  if (candidates[0] !== url) candidates.push(url);
+
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!res.ok) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      const ext = imageExtension(buf);
+      if (!ext) continue;
+      const dest = `${destBase}${ext}`;
+      fs.writeFileSync(dest, buf);
+      return dest;
+    } catch {
+      // try next
+    }
+  }
+  return undefined;
+}
+
+function moveOrCopy(src: string, dest: string): void {
+  try {
+    fs.renameSync(src, dest);
+  } catch {
+    fs.copyFileSync(src, dest);
+    unlinkQuiet(src);
+  }
+}
+
+function buildDownloadedEntry(
+  song: Song,
+  meta: { title: string; artist: string; album?: string },
+  filePath: string
+): DownloadedSong {
+  let size = 0;
+  try {
+    size = fs.statSync(filePath).size;
+  } catch {
+    size = 0;
+  }
+  return {
+    id: song.id,
+    title: meta.title,
+    artist: meta.artist,
+    album: meta.album || song.album,
+    durationMs: song.durationMs || 0,
+    filePath,
+    fileSizeBytes: size,
+    downloadedAt: Date.now(),
+    lastUsed: Date.now(),
+    thumbnailUrl: song.thumbnailUrl,
+    rawLrc: serializeLyricsToLrc(song.lyrics, meta.title, meta.artist),
+    plainLyrics: song.plainLyrics,
+    source: 'local',
+  };
+}
+
 export async function downloadSong(song: Song): Promise<DownloadedSong | null> {
   if (!song || !song.id) return null;
   const id = song.id;
@@ -254,31 +543,11 @@ export async function downloadSong(song: Song): Promise<DownloadedSong | null> {
     return index[id];
   }
 
-  const existingPath = song.audioUrl && !song.audioUrl.includes('://') && fs.existsSync(song.audioUrl)
-    ? song.audioUrl
-    : null;
+  const existingPath =
+    song.audioUrl && !song.audioUrl.includes('://') && fs.existsSync(song.audioUrl) ? song.audioUrl : null;
   if (existingPath) {
-    let size = 0;
-    try {
-      size = fs.statSync(existingPath).size;
-    } catch {
-      size = 0;
-    }
-    return upsertDownloadedSong({
-      id,
-      title: song.title || 'Unknown Title',
-      artist: song.artist || 'Unknown Artist',
-      album: song.album,
-      durationMs: song.durationMs || 0,
-      filePath: existingPath,
-      fileSizeBytes: size,
-      downloadedAt: Date.now(),
-      lastUsed: Date.now(),
-      thumbnailUrl: song.thumbnailUrl,
-      rawLrc: serializeLyricsToLrc(song.lyrics, song.title, song.artist),
-      plainLyrics: song.plainLyrics,
-      source: 'local',
-    });
+    const meta = resolveDownloadMetadata(song);
+    return upsertDownloadedSong(buildDownloadedEntry(song, meta, existingPath));
   }
 
   if (id in activeDownloads) {
@@ -292,52 +561,73 @@ export async function downloadSong(song: Song): Promise<DownloadedSong | null> {
   const downloadsDir = getDownloadsDir();
 
   const promise = (async (): Promise<DownloadedSong | null> => {
-    const outTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
-    const targetUrl = /^[a-zA-Z0-9_-]{11}$/.test(id)
-      ? `https://music.youtube.com/watch?v=${id}`
-      : song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl)
-        ? `https://music.youtube.com/watch?v=${song.audioUrl}`
-        : song.audioUrl || `https://music.youtube.com/watch?v=${id}`;
-
+    const prefix = `_tmp_${id}`;
     try {
+      const outTemplate = path.join(downloadsDir, `${prefix}.%(ext)s`);
+      const targetUrl = /^[a-zA-Z0-9_-]{11}$/.test(id)
+        ? `https://music.youtube.com/watch?v=${id}`
+        : song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl)
+          ? `https://music.youtube.com/watch?v=${song.audioUrl}`
+          : song.audioUrl || `https://music.youtube.com/watch?v=${id}`;
+
       await execFileAsync(
         ytDlp,
         [
-          '-f', 'bestaudio/best',
+          '-f',
+          'bestaudio/best',
           '--no-playlist',
           '--no-warnings',
           '--no-progress',
-          '-o', outTemplate,
+          '--no-mtime',
+          '--write-info-json',
+          '-o',
+          outTemplate,
           targetUrl,
         ],
         { timeout: 180000 }
       );
 
-      const matches = fs.readdirSync(downloadsDir).filter((f) => f === id || f.startsWith(`${id}.`));
-      if (matches.length === 0) return null;
-      const targetFile = path.join(downloadsDir, matches[0]);
-      const stat = fs.statSync(targetFile);
+      const staged = fs.readdirSync(downloadsDir).filter((f) => f === prefix || f.startsWith(`${prefix}.`));
+      const audioName = staged.find((f) => {
+        const ext = path.extname(f).toLowerCase();
+        if (!ext || ext === '.json' || ext === '.part' || ext === '.ytdl') return false;
+        return !IMAGE_EXTS[ext];
+      });
+      if (!audioName) return null;
+      const audioPath = path.join(downloadsDir, audioName);
+      const infoName = staged.find((f) => f.endsWith('.info.json'));
+      const info = infoName ? readInfoJson(path.join(downloadsDir, infoName)) : null;
 
-      loadDownloadsIndex();
-      const downloaded: DownloadedSong = {
-        id,
-        title: song.title || 'Unknown Title',
-        artist: song.artist || 'Unknown Artist',
-        album: song.album,
-        durationMs: song.durationMs || 0,
-        filePath: targetFile,
-        fileSizeBytes: stat.size,
-        downloadedAt: Date.now(),
-        lastUsed: Date.now(),
-        thumbnailUrl: song.thumbnailUrl,
-        rawLrc: serializeLyricsToLrc(song.lyrics, song.title, song.artist),
-        plainLyrics: song.plainLyrics,
-        source: 'local',
-      };
+      const meta = resolveDownloadMetadata(song, info);
+      const basename = downloadBasename(meta.artist, meta.title);
+      const mp3Path = uniqueDownloadPath(downloadsDir, basename, 'mp3', id);
+      const coverFile = await fetchCoverFile(song.thumbnailUrl, path.join(downloadsDir, `${prefix}.cover`));
 
-      return upsertDownloadedSong(downloaded);
+      const converted = await convertToTaggedMp3({
+        srcFile: audioPath,
+        destFile: mp3Path,
+        title: meta.title,
+        artist: meta.artist,
+        album: meta.album,
+        year: meta.year,
+        coverFile,
+      });
+
+      if (converted) {
+        unlinkQuiet(audioPath);
+        return upsertDownloadedSong(buildDownloadedEntry(song, meta, mp3Path));
+      }
+
+      const fallbackExt = (path.extname(audioPath).replace(/^\./, '') || 'opus').toLowerCase();
+      const fallbackPath = uniqueDownloadPath(downloadsDir, basename, fallbackExt, id);
+      if (path.resolve(audioPath) !== path.resolve(fallbackPath)) {
+        moveOrCopy(audioPath, fallbackPath);
+      }
+      return upsertDownloadedSong(buildDownloadedEntry(song, meta, fallbackPath));
     } catch {
       return null;
+    } finally {
+      cleanupStaging(downloadsDir, id);
     }
   })();
 
@@ -348,7 +638,6 @@ export async function downloadSong(song: Song): Promise<DownloadedSong | null> {
 
   return promise;
 }
-
 
 export function serializeLyricsToLrc(lyrics: LyricLine[] | undefined, title?: string, artist?: string): string {
   if (!lyrics || lyrics.length === 0) return '';
@@ -370,7 +659,6 @@ export function toPlayableSong(d: DownloadedSong): Song {
   if (d.rawLrc) {
     const parsed = parseLrc(d.rawLrc);
     lyrics = parsed.lines;
-
   }
   return {
     id: d.id,
@@ -385,5 +673,3 @@ export function toPlayableSong(d: DownloadedSong): Song {
     source: 'local',
   };
 }
-
-
