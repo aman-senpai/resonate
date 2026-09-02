@@ -722,11 +722,14 @@ export async function upgradeDownloadedSong(entry: DownloadedSong): Promise<Down
   }
 }
 
-export function upgradeLegacyDownloads(): Promise<number> {
+export function upgradeLegacyDownloads(skipFilePath?: string): Promise<number> {
   if (upgradeInFlight) return upgradeInFlight;
+  const skip =
+    skipFilePath && !skipFilePath.includes('://') ? path.resolve(skipFilePath) : '';
   const work = (async () => {
     let n = 0;
     for (const song of getDownloadedSongs()) {
+      if (skip && path.resolve(song.filePath) === skip) continue;
       if (!needsDownloadUpgrade(song)) continue;
       const next = await upgradeDownloadedSong(song);
       if (next && !needsDownloadUpgrade(next)) n += 1;
