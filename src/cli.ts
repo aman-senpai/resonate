@@ -646,7 +646,7 @@ function printThemes(): void {
 }
 
 function printVersion(): void {
-  console.log('Resonate YouTube Music CLI v1.2.2');
+  console.log('Resonate YouTube Music CLI v1.2.3');
 
 
 

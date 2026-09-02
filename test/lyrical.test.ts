@@ -22,7 +22,7 @@ import {
   renderSearchModal,
 } from '../src/ui/components/Modals.js';
 import { LyricalApp } from '../src/app.js';
-import { extractPlaylistId, extractThumbnailUrl, extractVideoId, isStreamRef } from '../src/services/ytmusic.js';
+import { audioFormatUrl, extractPlaylistId, extractThumbnailUrl, extractVideoId, isStreamRef } from '../src/services/ytmusic.js';
 import { clearAuthCredentials, loadAuthCredentials, saveAuthCredentials } from '../src/services/auth.js';
 
 const globalSong = createSongFromText(
@@ -786,6 +786,44 @@ describe('Audio engine selection', () => {
     assert.strictEqual(muxerEnabled(staticListing, 'alsa'), true);
   });
 });
+
+describe('Innertube stream URL decipher', () => {
+  it('awaits async decipher urls', async () => {
+    const url = await audioFormatUrl({
+      decipher: async () => 'https://googlevideo.com/audio',
+    }, {});
+    assert.strictEqual(url, 'https://googlevideo.com/audio');
+  });
+
+  it('falls back to fmt.url when async decipher rejects', async () => {
+    const rejections: unknown[] = [];
+    const onRej = (reason: unknown) => { rejections.push(reason); };
+    process.on('unhandledRejection', onRej);
+    try {
+      const url = await audioFormatUrl({
+        url: 'https://googlevideo.com/direct',
+        decipher: () => Promise.reject(new Error('No valid URL to decipher')),
+      }, {});
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setImmediate(resolve);
+      await promise;
+      assert.strictEqual(url, 'https://googlevideo.com/direct');
+      assert.deepStrictEqual(rejections, []);
+    } finally {
+      process.off('unhandledRejection', onRej);
+    }
+  });
+
+  it('returns undefined when decipher rejects and no url exists', async () => {
+    const url = await audioFormatUrl({
+      decipher: async () => {
+        throw new Error('No valid URL to decipher');
+      },
+    }, {});
+    assert.strictEqual(url, undefined);
+  });
+});
+
 
 describe('Playback speed audio filters', () => {
   it('skips atempo at 1x and chains outside 0.5-2', () => {

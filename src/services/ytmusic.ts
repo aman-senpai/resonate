@@ -210,12 +210,16 @@ function parseDurationText(text: string): number {
   return 0;
 }
 
-function audioFormatUrl(fmt: unknown, player: unknown): string | undefined {
+export async function audioFormatUrl(fmt: unknown, player: unknown): Promise<string | undefined> {
   if (!fmt || typeof fmt !== 'object') return undefined;
   if ('decipher' in fmt && typeof fmt.decipher === 'function') {
-    const decoded = fmt.decipher(player);
-    if (typeof decoded === 'string' && (decoded.startsWith('http://') || decoded.startsWith('https://'))) {
-      return decoded;
+    try {
+      const decoded = await fmt.decipher(player);
+      if (typeof decoded === 'string' && (decoded.startsWith('http://') || decoded.startsWith('https://'))) {
+        return decoded;
+      }
+    } catch {
+      // youtubei.js PlayerError: missing url/cipher must not crash the TUI
     }
   }
   if ('url' in fmt && typeof fmt.url === 'string' && (fmt.url.startsWith('http://') || fmt.url.startsWith('https://'))) {
@@ -306,6 +310,8 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
   }
 }
 
+const YT_DLP_GETURL_TIMEOUT_MS = 60_000;
+
 async function resolveAudioStreamUrlFresh(trimmed: string): Promise<string> {
   const videoId = extractVideoId(trimmed);
   const isId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
@@ -320,7 +326,7 @@ async function resolveAudioStreamUrlFresh(trimmed: string): Promise<string> {
     if (cookiesOk) args.push('--cookies', cookiesFile);
     args.push(targetUrl);
     try {
-      const { stdout } = await execFileAsync(ytDlpPath, args, { timeout: 20000 });
+      const { stdout } = await execFileAsync(ytDlpPath, args, { timeout: YT_DLP_GETURL_TIMEOUT_MS });
       const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
       if (url) {
         rememberStreamUrl(trimmed, url);
@@ -332,7 +338,7 @@ async function resolveAudioStreamUrlFresh(trimmed: string): Promise<string> {
           const { stdout } = await execFileAsync(
             ytDlpPath,
             ['-g', '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', targetUrl],
-            { timeout: 20000 }
+            { timeout: YT_DLP_GETURL_TIMEOUT_MS }
           );
           const url = stdout.trim().split('\n').find((line) => line.startsWith('http://') || line.startsWith('https://'));
           if (url) {
@@ -350,11 +356,31 @@ async function resolveAudioStreamUrlFresh(trimmed: string): Promise<string> {
     try {
       const yt = await getYtMusicClient();
       const info = await yt.getInfo(videoId);
-      const fmt: unknown = info.chooseFormat({ type: 'audio', quality: 'best' });
-      const url = audioFormatUrl(fmt, yt.session.player);
-      if (url) {
-        rememberStreamUrl(trimmed, url);
-        return url;
+      const player = yt.session.player;
+      const candidates: unknown[] = [];
+      try {
+        candidates.push(info.chooseFormat({ type: 'audio', quality: 'best' }));
+      } catch {
+        // try raw streaming_data next
+      }
+      const rawInfo: unknown = info;
+      if (rawInfo && typeof rawInfo === 'object' && 'streaming_data' in rawInfo) {
+        const streaming = rawInfo.streaming_data;
+        if (streaming && typeof streaming === 'object') {
+          if ('adaptive_formats' in streaming && Array.isArray(streaming.adaptive_formats)) {
+            candidates.push(...streaming.adaptive_formats);
+          }
+          if ('formats' in streaming && Array.isArray(streaming.formats)) {
+            candidates.push(...streaming.formats);
+          }
+        }
+      }
+      for (const fmt of candidates) {
+        const url = await audioFormatUrl(fmt, player);
+        if (url) {
+          rememberStreamUrl(trimmed, url);
+          return url;
+        }
       }
     } catch {
       // fall through
