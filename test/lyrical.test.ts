@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { parseLrc, parseTimestampToMs, formatMsToTime, createSongFromText } from '../src/parser/lrc.js';
 import { LyricPlayer } from '../src/engine/player.js';
-import { createAudioBackend, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+import { createAudioBackend, muxerEnabled, pickPlayerKind, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+
 import { AudioVisualizer } from '../src/engine/visualizer.js';
 import { THEMES, ThemeManager } from '../src/ui/themes.js';
 import { getVisualWidth, truncate, pad, gradientText, drawBox, stripAnsi, sliceVisualEnd } from '../src/ui/renderer.js';
@@ -719,6 +720,72 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
     assert.strictEqual(isStreamRef('https://music.youtube.com/watch?v=dQw4w9WgXcQ'), true);
   });
 });
+
+describe('Audio engine selection', () => {
+  const pulseListing = ' E pulse            PulseAudio output\n E alsa             ALSA output\n';
+  const staticListing = ' E alsa             ALSA output\n E wav              WAV output\n';
+  const macListing = ' E coreaudio        Core Audio\n E wav              WAV output\n';
+
+  it('prefers ffplay on every platform', () => {
+    const spec = pickPlayerKind({
+      platform: 'linux',
+      ffplay: '/usr/bin/ffplay',
+      mpv: '/usr/bin/mpv',
+      ffmpeg: '/usr/bin/ffmpeg',
+      paplay: '/usr/bin/paplay',
+      pwplay: null,
+      muxers: pulseListing,
+    });
+    assert.deepStrictEqual(spec, { kind: 'ffplay', bin: '/usr/bin/ffplay' });
+  });
+
+  it('does not pick pulse for johnvansickle-style ffmpeg without pulse muxer', () => {
+    const spec = pickPlayerKind({
+      platform: 'linux',
+      ffplay: null,
+      mpv: null,
+      ffmpeg: '/home/u/.local/bin/ffmpeg',
+      paplay: '/usr/bin/paplay',
+      pwplay: '/usr/bin/pw-play',
+      muxers: staticListing,
+    });
+    assert.strictEqual(spec?.kind, 'ffmpeg-paplay');
+    assert.strictEqual(spec?.sinkBin, '/usr/bin/paplay');
+  });
+
+  it('never uses ffmpeg-pulse on macOS', () => {
+    const spec = pickPlayerKind({
+      platform: 'darwin',
+      ffplay: null,
+      mpv: null,
+      ffmpeg: '/opt/homebrew/bin/ffmpeg',
+      paplay: null,
+      pwplay: null,
+      muxers: pulseListing,
+    });
+    assert.strictEqual(spec, null);
+  });
+
+  it('uses CoreAudio ffmpeg output on macOS when ffplay is missing', () => {
+    const spec = pickPlayerKind({
+      platform: 'darwin',
+      ffplay: null,
+      mpv: null,
+      ffmpeg: '/opt/homebrew/bin/ffmpeg',
+      paplay: null,
+      pwplay: null,
+      muxers: macListing,
+    });
+    assert.deepStrictEqual(spec, { kind: 'ffmpeg-coreaudio', bin: '/opt/homebrew/bin/ffmpeg' });
+  });
+
+  it('parses muxer listing flags', () => {
+    assert.strictEqual(muxerEnabled(pulseListing, 'pulse'), true);
+    assert.strictEqual(muxerEnabled(staticListing, 'pulse'), false);
+    assert.strictEqual(muxerEnabled(staticListing, 'alsa'), true);
+  });
+});
+
 
 describe('Loop Shuffle Mute Speed Controls', () => {
   it('should mute, restore prior volume, and unmute on setVolume', () => {

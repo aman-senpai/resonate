@@ -134,8 +134,43 @@ fi
 
 echo -e "${BLUE}[3/5]${NC} audio engine (ffplay / mpv / ffmpeg)"
 
+have_ffplay_or_mpv() {
+  bin_ok ffplay -version || bin_ok mpv --version
+}
+
+have_ffmpeg() {
+  bin_ok ffmpeg -version
+}
+
+have_linux_sink() {
+  command -v paplay >/dev/null 2>&1 || command -v pw-play >/dev/null 2>&1
+}
+
 have_audio_engine() {
-  bin_ok ffplay -version || bin_ok mpv --version || bin_ok ffmpeg -version
+  if have_ffplay_or_mpv; then
+    return 0
+  fi
+  if [ "$OS" = "darwin" ]; then
+    return 1
+  fi
+  # Static ffmpeg cannot speak Pulse; paplay/pw-play is the playback sink.
+  have_ffmpeg && have_linux_sink
+}
+
+run_sudo() {
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  if sudo -n true >/dev/null 2>&1; then
+    sudo -n "$@"
+    return
+  fi
+  if [ -e /dev/tty ]; then
+    echo -e "      ${YELLOW}sudo required to install distro ffmpeg (includes ffplay)${NC}"
+    sudo "$@" </dev/tty >/dev/tty 2>/dev/tty
+    return
+  fi
+  return 1
 }
 
 try_pkg_ffmpeg() {
@@ -147,29 +182,22 @@ try_pkg_ffmpeg() {
     return 0
   fi
 
-  if ! command -v sudo >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! sudo -n true >/dev/null 2>&1; then
-    return 0
-  fi
-
   if command -v dnf >/dev/null 2>&1; then
     echo -e "      sudo dnf install ffmpeg-free"
-    sudo -n dnf install -y ffmpeg-free || sudo -n dnf install -y ffmpeg || true
+    run_sudo dnf install -y ffmpeg-free || run_sudo dnf install -y ffmpeg || true
   elif command -v apt-get >/dev/null 2>&1; then
     echo -e "      sudo apt-get install ffmpeg"
-    sudo -n apt-get update -qq || true
-    sudo -n apt-get install -y ffmpeg || true
+    run_sudo apt-get update -qq || true
+    run_sudo apt-get install -y ffmpeg || true
   elif command -v pacman >/dev/null 2>&1; then
     echo -e "      sudo pacman -S ffmpeg"
-    sudo -n pacman -Sy --noconfirm ffmpeg || true
+    run_sudo pacman -Sy --noconfirm ffmpeg || true
   elif command -v zypper >/dev/null 2>&1; then
     echo -e "      sudo zypper install ffmpeg"
-    sudo -n zypper install -y ffmpeg || true
+    run_sudo zypper install -y ffmpeg || true
   elif command -v apk >/dev/null 2>&1; then
     echo -e "      sudo apk add ffmpeg"
-    sudo -n apk add ffmpeg || true
+    run_sudo apk add ffmpeg || true
   fi
 }
 
@@ -182,7 +210,7 @@ install_static_ffmpeg_linux() {
   fi
   tarball="ffmpeg-release-${jl_arch}-static.tar.xz"
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/resonate-ff.XXXXXX")"
-  echo -e "      downloading static ffmpeg (${jl_arch})"
+  echo -e "      downloading static ffmpeg (${jl_arch}) for decode only"
   if ! curl -fsSL --retry 3 --retry-delay 1 \
       "https://johnvansickle.com/ffmpeg/releases/${tarball}" \
       -o "$tmpdir/ffmpeg.tar.xz"; then
@@ -207,24 +235,31 @@ if have_audio_engine; then
   elif command -v mpv >/dev/null 2>&1; then
     echo -e "      found $(command -v mpv)"
   else
-    echo -e "      found $(command -v ffmpeg)"
+    echo -e "      found $(command -v ffmpeg) + $(command -v paplay 2>/dev/null || command -v pw-play)"
   fi
 else
   try_pkg_ffmpeg || true
   if ! have_audio_engine && [ "$OS" = "linux" ]; then
-    install_static_ffmpeg_linux || true
+    if ! have_ffmpeg; then
+      install_static_ffmpeg_linux || true
+    fi
   fi
 fi
 
 if ! have_audio_engine; then
-  echo -e "${RED}Error: no audio engine (need ffplay, mpv, or ffmpeg)${NC}"
-  echo "Install ffmpeg, then re-run this script:"
-  echo "  Fedora:  sudo dnf install ffmpeg-free"
-  echo "  Debian:  sudo apt install ffmpeg"
-  echo "  Arch:    sudo pacman -S ffmpeg"
-  echo "  macOS:   brew install ffmpeg"
+  echo -e "${RED}Error: no playable audio engine${NC}"
+  echo "Ubuntu/Debian:  sudo apt install ffmpeg"
+  echo "Fedora:         sudo dnf install ffmpeg-free"
+  echo "Arch:           sudo pacman -S ffmpeg"
+  echo "macOS:          brew install ffmpeg"
+  echo "Linux fallback: ffmpeg (decode) plus paplay or pw-play (PipeWire/Pulse)"
   exit 1
 fi
+
+if [ "$OS" = "linux" ] && ! have_ffplay_or_mpv && have_ffmpeg && have_linux_sink; then
+  echo -e "      ${YELLOW}using ffmpeg → paplay/pw-play (static ffmpeg has no Pulse output)${NC}"
+fi
+
 
 echo -e "${BLUE}[4/5]${NC} resonate binary"
 TARGET_BIN="$INSTALL_DIR/$BIN_NAME"
@@ -288,7 +323,13 @@ elif command -v mpv >/dev/null 2>&1; then
   echo "  mpv      : $(command -v mpv)"
 else
   echo "  ffmpeg   : $(command -v ffmpeg)"
+  if command -v paplay >/dev/null 2>&1; then
+    echo "  paplay   : $(command -v paplay)"
+  elif command -v pw-play >/dev/null 2>&1; then
+    echo "  pw-play  : $(command -v pw-play)"
+  fi
 fi
+
 echo ""
 if [ "$NEED_NEW_SHELL" -eq 1 ]; then
   echo -e "${YELLOW}Open a new terminal, or run:${NC}"

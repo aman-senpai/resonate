@@ -21,25 +21,78 @@ export interface IAudioBackend {
   getName(): string;
 }
 
-type PlayerKind = 'ffplay' | 'mpv' | 'ffmpeg-pulse' | 'ffmpeg-alsa';
+export type PlayerKind =
+  | 'ffplay'
+  | 'mpv'
+  | 'ffmpeg-pulse'
+  | 'ffmpeg-alsa'
+  | 'ffmpeg-coreaudio'
+  | 'ffmpeg-paplay'
+  | 'ffmpeg-pwplay';
 
-interface PlayerSpec {
+export interface PlayerSpec {
   kind: PlayerKind;
   bin: string;
+  sinkBin?: string;
+}
+
+const muxerCache = new Map<string, string>();
+
+export function ffmpegMuxerListing(bin: string): string {
+  const cached = muxerCache.get(bin);
+  if (cached != null) return cached;
+  const r = spawnSync(bin, ['-hide_banner', '-muxers'], { encoding: 'utf8', timeout: 8000 });
+  const text = `${r.stdout || ''}\n${r.stderr || ''}`;
+  muxerCache.set(bin, text);
+  return text;
+}
+
+export function muxerEnabled(listing: string, name: string): boolean {
+  return new RegExp(`(^|\\n)\\s*E\\s+${name}\\b`, 'm').test(listing);
+}
+
+export function pickPlayerKind(opts: {
+  platform: string;
+  ffplay: string | null;
+  mpv: string | null;
+  ffmpeg: string | null;
+  paplay: string | null;
+  pwplay: string | null;
+  muxers: string;
+}): PlayerSpec | null {
+  if (opts.ffplay) return { kind: 'ffplay', bin: opts.ffplay };
+  if (opts.mpv) return { kind: 'mpv', bin: opts.mpv };
+  if (!opts.ffmpeg) return null;
+
+  if (opts.platform === 'darwin') {
+    if (muxerEnabled(opts.muxers, 'coreaudio')) {
+      return { kind: 'ffmpeg-coreaudio', bin: opts.ffmpeg };
+    }
+    return null;
+  }
+
+  if (muxerEnabled(opts.muxers, 'pulse')) {
+    return { kind: 'ffmpeg-pulse', bin: opts.ffmpeg };
+  }
+  if (opts.paplay) return { kind: 'ffmpeg-paplay', bin: opts.ffmpeg, sinkBin: opts.paplay };
+  if (opts.pwplay) return { kind: 'ffmpeg-pwplay', bin: opts.ffmpeg, sinkBin: opts.pwplay };
+  if (muxerEnabled(opts.muxers, 'alsa')) {
+    return { kind: 'ffmpeg-alsa', bin: opts.ffmpeg };
+  }
+  return null;
 }
 
 function detectPlayer(): PlayerSpec | null {
-  const ffplay = findExecutable('ffplay');
-  if (ffplay) return { kind: 'ffplay', bin: ffplay };
-
-  const mpv = findExecutable('mpv');
-  if (mpv) return { kind: 'mpv', bin: mpv };
-
   const ffmpeg = findExecutable('ffmpeg');
-  if (ffmpeg && process.platform !== 'darwin') {
-    return { kind: 'ffmpeg-pulse', bin: ffmpeg };
-  }
-  return null;
+  return pickPlayerKind({
+    platform: process.platform,
+    ffplay: findExecutable('ffplay'),
+    mpv: findExecutable('mpv'),
+    ffmpeg,
+    paplay: findExecutable('paplay'),
+    pwplay: findExecutable('pw-play'),
+    muxers: ffmpeg ? ffmpegMuxerListing(ffmpeg) : '',
+  });
 }
 
 function volumeFilter(vol: number): string {
@@ -52,7 +105,10 @@ const PLAYER_APP_NAMES: Record<string, true> = {
   mpv: true,
   ffmpeg: true,
   resonate: true,
+  paplay: true,
+  'pw-play': true,
 };
+
 
 function pulseIndexes(raw: unknown, pid: number | null): string[] {
   if (!Array.isArray(raw)) return [];
@@ -113,7 +169,11 @@ function setPulseVolume(pid: number | null, vol: number): boolean {
       block.includes('application.name = "ffplay"') ||
       block.includes('application.name = "mpv"') ||
       block.includes('application.name = "ffmpeg"') ||
-      block.includes('node.name = "ffplay"');
+      block.includes('application.name = "paplay"') ||
+      block.includes('application.name = "pw-play"') ||
+      block.includes('node.name = "ffplay"') ||
+      block.includes('node.name = "paplay"');
+
     const pidHit = pid != null && block.includes(`application.process.id = "${pid}"`);
     if (!named && !pidHit) continue;
     const id = parseInt(block, 10);
@@ -200,6 +260,8 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
 
 export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private proc: ChildProcess | null = null;
+  private sinkProc: ChildProcess | null = null;
+
   public currentMs: number = 0;
   public status: 'playing' | 'paused' | 'stopped' | 'ended' = 'stopped';
   public currentVolume: number = 100;
@@ -281,17 +343,61 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       ];
     }
 
-    const outFmt = kind === 'ffmpeg-alsa' ? 'alsa' : 'pulse';
-    const args = [
+    const common = [
       '-hide_banner',
       '-loglevel', 'error',
       '-reconnect', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5',
     ];
-    if (startMs > 0) args.push('-ss', startSec);
-    args.push('-i', streamUrl, '-vn', '-af', volumeFilter(this.currentVolume), '-f', outFmt, 'default');
-    return args;
+    if (startMs > 0) common.push('-ss', startSec);
+
+    if (kind === 'ffmpeg-paplay' || kind === 'ffmpeg-pwplay') {
+      return [
+        ...common,
+        '-i', streamUrl,
+        '-vn',
+        '-ac', '2',
+        '-ar', '44100',
+        '-af', volumeFilter(this.currentVolume),
+        '-f', 'wav',
+        'pipe:1',
+      ];
+    }
+
+    const outFmt = kind === 'ffmpeg-alsa' ? 'alsa' : kind === 'ffmpeg-coreaudio' ? 'coreaudio' : 'pulse';
+    return [...common, '-i', streamUrl, '-vn', '-af', volumeFilter(this.currentVolume), '-f', outFmt, 'default'];
+  }
+
+  private isPiped(): boolean {
+    return this.spec?.kind === 'ffmpeg-paplay' || this.spec?.kind === 'ffmpeg-pwplay';
+  }
+
+  private nextFallbackSpec(): PlayerSpec | null {
+    if (!this.spec) return null;
+    const ffmpeg = this.spec.bin;
+    if (this.spec.kind === 'ffmpeg-pulse') {
+      const paplay = findExecutable('paplay');
+      if (paplay) return { kind: 'ffmpeg-paplay', bin: ffmpeg, sinkBin: paplay };
+      const pwplay = findExecutable('pw-play');
+      if (pwplay) return { kind: 'ffmpeg-pwplay', bin: ffmpeg, sinkBin: pwplay };
+      if (muxerEnabled(ffmpegMuxerListing(ffmpeg), 'alsa')) {
+        return { kind: 'ffmpeg-alsa', bin: ffmpeg };
+      }
+    }
+    if (this.spec.kind === 'ffmpeg-paplay') {
+      const pwplay = findExecutable('pw-play');
+      if (pwplay) return { kind: 'ffmpeg-pwplay', bin: ffmpeg, sinkBin: pwplay };
+      if (muxerEnabled(ffmpegMuxerListing(ffmpeg), 'alsa')) {
+        return { kind: 'ffmpeg-alsa', bin: ffmpeg };
+      }
+    }
+    if (this.spec.kind === 'ffmpeg-pwplay') {
+      if (muxerEnabled(ffmpegMuxerListing(ffmpeg), 'alsa')) {
+        return { kind: 'ffmpeg-alsa', bin: ffmpeg };
+      }
+    }
+    return null;
   }
 
   private async spawnPlayer(streamUrl: string, startMs: number, sessionId: number): Promise<void> {
@@ -301,10 +407,16 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     const generation = ++this.spawnGeneration;
     const args = this.playerArgs(streamUrl, startMs, this.spec.kind);
 
+    if (this.isPiped() && this.spec.sinkBin) {
+      await this.spawnPiped(args, this.spec.sinkBin, this.spec.kind, sessionId, generation);
+      return;
+    }
+
     await new Promise<void>((resolve, reject) => {
       const p = spawn(this.spec!.bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
       this.proc = p;
       this.frozen = false;
+      p.stderr?.resume();
 
       const onError = (err: Error) => {
         if (generation !== this.spawnGeneration) return;
@@ -327,11 +439,64 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     });
   }
 
+  private async spawnPiped(
+    ffArgs: string[],
+    sinkBin: string,
+    kind: PlayerKind,
+    sessionId: number,
+    generation: number
+  ): Promise<void> {
+    const sinkArgs = kind === 'ffmpeg-pwplay' ? ['-'] : [];
+    await new Promise<void>((resolve, reject) => {
+      const ff = spawn(this.spec!.bin, ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const sink = spawn(sinkBin, sinkArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
+      this.proc = ff;
+      this.sinkProc = sink;
+      this.frozen = false;
+      ff.stderr?.resume();
+      sink.stderr?.resume();
+      if (ff.stdout && sink.stdin) {
+        ff.stdout.pipe(sink.stdin);
+        sink.stdin.on('error', () => {});
+      }
+
+      let spawned = 0;
+      let settled = false;
+      const fail = (err: Error) => {
+        if (settled || generation !== this.spawnGeneration) return;
+        settled = true;
+        reject(err);
+      };
+      const ready = () => {
+        spawned += 1;
+        if (spawned < 2 || settled) return;
+        settled = true;
+        this.scheduleVolumeApply();
+        resolve();
+      };
+
+      ff.once('error', fail);
+      sink.once('error', fail);
+      ff.once('spawn', ready);
+      sink.once('spawn', ready);
+      sink.on('close', (code) => {
+        void this.onProcClose(code, sessionId, generation);
+      });
+      ff.on('close', (code) => {
+        if (generation !== this.spawnGeneration) return;
+        if (this.sinkProc && code && code !== 0) {
+          try { this.sinkProc.kill('SIGKILL'); } catch {}
+        }
+      });
+    });
+  }
+
   private async onProcClose(code: number | null, sessionId: number, generation: number): Promise<void> {
     if (generation !== this.spawnGeneration) return;
     if (sessionId !== this.playSessionId) return;
     if (this.status !== 'playing') return;
-    if (this.proc) this.proc = null;
+    this.proc = null;
+    this.sinkProc = null;
     this.frozen = false;
 
     if (code === 0) {
@@ -350,10 +515,10 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
 
     this.retrying = true;
     try {
-      if (this.spec?.kind === 'ffmpeg-pulse') {
-        this.spec = { kind: 'ffmpeg-alsa', bin: this.spec.bin };
+      const fallback = this.nextFallbackSpec();
+      if (fallback) {
+        this.spec = fallback;
         await this.spawnPlayer(this.currentStreamUrl, this.currentMs, sessionId);
-        this.retrying = false;
         return;
       }
 
@@ -362,7 +527,6 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         if (sessionId !== this.playSessionId) return;
         this.currentStreamUrl = fresh;
         await this.spawnPlayer(fresh, this.currentMs, sessionId);
-        this.retrying = false;
         return;
       }
     } catch (err: unknown) {
@@ -374,13 +538,15 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     }
   }
 
+
   public pause(): void {
     if (this.status !== 'playing') return;
     this.status = 'paused';
     this.stopClock();
-    if (this.proc && this.proc.pid) {
+    const pids = [this.proc?.pid, this.sinkProc?.pid].filter((p): p is number => typeof p === 'number');
+    if (pids.length > 0) {
       try {
-        process.kill(this.proc.pid, 'SIGSTOP');
+        for (const pid of pids) process.kill(pid, 'SIGSTOP');
         this.frozen = true;
         return;
       } catch {
@@ -391,6 +557,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     this.killProc();
   }
 
+
   public resume(): void {
     if (this.status !== 'paused') return;
     this.status = 'playing';
@@ -399,6 +566,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (this.frozen && this.proc && this.proc.pid) {
       try {
         process.kill(this.proc.pid, 'SIGCONT');
+        if (this.sinkProc?.pid) process.kill(this.sinkProc.pid, 'SIGCONT');
         this.frozen = false;
         this.startClock();
         return;
@@ -406,6 +574,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         this.frozen = false;
       }
     }
+
 
     const sessionId = ++this.playSessionId;
     if (this.currentStreamUrl && this.spec) {
@@ -483,10 +652,12 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
 
   public setVolume(vol: number): void {
     this.currentVolume = Math.max(0, Math.min(150, vol));
-    if (!setPulseVolume(this.proc?.pid ?? null, this.currentVolume)) {
+    const pid = this.sinkProc?.pid ?? this.proc?.pid ?? null;
+    if (!setPulseVolume(pid, this.currentVolume)) {
       this.scheduleVolumeApply();
     }
   }
+
 
   public stop(): void {
     this.playSessionId++;
@@ -509,8 +680,12 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     if (this.spec.kind === 'ffplay') return 'FFplay';
     if (this.spec.kind === 'mpv') return 'mpv';
     if (this.spec.kind === 'ffmpeg-alsa') return 'ffmpeg/ALSA';
+    if (this.spec.kind === 'ffmpeg-coreaudio') return 'ffmpeg/CoreAudio';
+    if (this.spec.kind === 'ffmpeg-paplay') return 'ffmpeg/paplay';
+    if (this.spec.kind === 'ffmpeg-pwplay') return 'ffmpeg/PipeWire';
     return 'ffmpeg/Pulse';
   }
+
 
   private clearVolumeTimers(): void {
     for (const t of this.volumeTimers) clearTimeout(t);
@@ -521,7 +696,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     this.clearVolumeTimers();
     for (const delay of [60, 180, 400, 900]) {
       this.volumeTimers.push(setTimeout(() => {
-        setPulseVolume(this.proc?.pid ?? null, this.currentVolume);
+        setPulseVolume(this.sinkProc?.pid ?? this.proc?.pid ?? null, this.currentVolume);
       }, delay));
     }
   }
@@ -554,13 +729,16 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private killProc(): void {
     this.spawnGeneration++;
     this.frozen = false;
-    if (!this.proc) return;
-    const p = this.proc;
+    const ff = this.proc;
+    const sink = this.sinkProc;
     this.proc = null;
-    try {
-      p.kill('SIGKILL');
-    } catch {}
+    this.sinkProc = null;
+    for (const p of [ff, sink]) {
+      if (!p) continue;
+      try { p.kill('SIGKILL'); } catch {}
+    }
   }
+
 
   private startClock(): void {
     if (this.timer) return;
