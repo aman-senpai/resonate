@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 let index: Record<string, DownloadedSong> = {};
 let loaded = false;
 const activeDownloads: Record<string, Promise<DownloadedSong | null>> = {};
+let upgradeInFlight: Promise<number> | null = null;
 
 const IMAGE_EXTS: Record<string, true> = {
   '.jpg': true,
@@ -33,6 +34,7 @@ function getIndexFile(): string {
 export function resetDownloadsState(): void {
   index = {};
   loaded = false;
+  upgradeInFlight = null;
 }
 
 export function ensureDownloadsDir(): void {
@@ -637,6 +639,114 @@ export async function downloadSong(song: Song): Promise<DownloadedSong | null> {
   });
 
   return promise;
+}
+
+export function needsDownloadUpgrade(entry: DownloadedSong): boolean {
+  if (!entry.filePath || !fs.existsSync(entry.filePath)) return false;
+  const parsed = path.parse(entry.filePath);
+  const expected = downloadBasename(entry.artist || '', entry.title || '');
+  const taggedName = `${expected} [${sanitizeFilename(entry.id)}]`;
+  const nameOk = parsed.name === expected || parsed.name === taggedName;
+  const isMp3 = parsed.ext.toLowerCase() === '.mp3';
+  if (!isMp3 || !nameOk) return true;
+  try {
+    const fd = fs.openSync(entry.filePath, 'r');
+    const buf = Buffer.alloc(3);
+    const n = fs.readSync(fd, buf, 0, 3, 0);
+    fs.closeSync(fd);
+    return n < 3 || buf.toString('ascii') !== 'ID3';
+  } catch {
+    return true;
+  }
+}
+
+export async function upgradeDownloadedSong(entry: DownloadedSong): Promise<DownloadedSong | null> {
+  if (!needsDownloadUpgrade(entry)) return entry;
+  if (!findExecutable('ffmpeg')) return null;
+
+  ensureDownloadsDir();
+  const dir = getDownloadsDir();
+  const src = entry.filePath;
+  const meta = resolveDownloadMetadata({
+    id: entry.id,
+    title: entry.title,
+    artist: entry.artist,
+    album: entry.album,
+  });
+  const basename = downloadBasename(meta.artist, meta.title);
+  const wanted = path.join(dir, `${basename}.mp3`);
+  const srcResolved = path.resolve(src);
+  const finalPath =
+    fs.existsSync(wanted) && path.resolve(wanted) !== srcResolved
+      ? path.join(dir, `${basename} [${sanitizeFilename(entry.id)}].mp3`)
+      : wanted;
+  const stagingMp3 = path.join(dir, `_tmp_${entry.id}.mp3`);
+
+  try {
+    const coverFile = await fetchCoverFile(entry.thumbnailUrl, path.join(dir, `_tmp_${entry.id}.cover`));
+    const converted = await convertToTaggedMp3({
+      srcFile: src,
+      destFile: stagingMp3,
+      title: meta.title,
+      artist: meta.artist,
+      album: meta.album,
+      year: meta.year,
+      coverFile,
+    });
+    if (!converted) return null;
+
+    try {
+      fs.renameSync(stagingMp3, finalPath);
+    } catch {
+      fs.copyFileSync(stagingMp3, finalPath);
+      unlinkQuiet(stagingMp3);
+    }
+    if (!fs.existsSync(finalPath) || fs.statSync(finalPath).size <= 0) return null;
+    if (srcResolved !== path.resolve(finalPath)) {
+      unlinkQuiet(src);
+    }
+
+    loadDownloadsIndex();
+    if (!index[entry.id]) return null;
+    let size = 0;
+    try {
+      size = fs.statSync(finalPath).size;
+    } catch {
+      size = 0;
+    }
+    const next: DownloadedSong = {
+      ...index[entry.id],
+      title: meta.title,
+      artist: meta.artist,
+      album: meta.album || index[entry.id].album,
+      filePath: finalPath,
+      fileSizeBytes: size,
+    };
+    index[entry.id] = next;
+    saveDownloadsIndex();
+    return next;
+  } catch {
+    return null;
+  } finally {
+    cleanupStaging(dir, entry.id);
+  }
+}
+
+export function upgradeDownloadedLibrary(): Promise<number> {
+  if (upgradeInFlight) return upgradeInFlight;
+  const work = (async () => {
+    let n = 0;
+    for (const song of getDownloadedSongs()) {
+      if (!needsDownloadUpgrade(song)) continue;
+      const next = await upgradeDownloadedSong(song);
+      if (next && !needsDownloadUpgrade(next)) n += 1;
+    }
+    return n;
+  })();
+  upgradeInFlight = work.finally(() => {
+    upgradeInFlight = null;
+  });
+  return work;
 }
 
 export function serializeLyricsToLrc(lyrics: LyricLine[] | undefined, title?: string, artist?: string): string {

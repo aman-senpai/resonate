@@ -35,6 +35,7 @@ import {
   isSongDownloaded,
   toPlayableSong,
   touchDownloadedSong,
+  upgradeDownloadedLibrary,
 } from './services/downloadManager.js';
 
 import { formatMsToTime } from './parser/lrc.js';
@@ -219,6 +220,9 @@ export class LyricalApp {
     this.render();
 
     this.player.play().catch(() => {});
+    void upgradeDownloadedLibrary().then((n) => {
+      if (n > 0) this.showNotification(`Upgraded ${n} offline song${n === 1 ? '' : 's'}`, 2500);
+    });
   }
 
   public stop(): void {

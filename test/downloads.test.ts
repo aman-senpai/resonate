@@ -21,12 +21,15 @@ import {
   findDownloadedMatch,
   formatBytes,
   getDownloadedCount,
+  getDownloadedSong,
   getDownloadedSongs,
+  needsDownloadUpgrade,
   resetDownloadsState,
   resolveDownloadMetadata,
   sanitizeFilename,
   toPlayableSong,
   uniqueDownloadPath,
+  upgradeDownloadedLibrary,
   upgradeThumbnailUrl,
   upsertDownloadedSong,
 } from '../src/services/downloadManager.js';
@@ -275,4 +278,62 @@ describe('Download filenames and metadata', () => {
     assert.ok(compact.includes('APIC') || buf.includes(Buffer.from([0xff, 0xd8, 0xff])));
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('flags id-named files and skips already tagged MP3s', () => {
+    resetDownloadsState();
+    deleteAllDownloadedSongs();
+    const filePath = seedSong('vid99999999', 'Night Changes', 'One Direction');
+    const legacy = getDownloadedSong('vid99999999');
+    assert.ok(legacy);
+    assert.strictEqual(needsDownloadUpgrade(legacy!), true);
+
+    const mp3 = path.join(tmp, 'downloads', 'One Direction - Night Changes.mp3');
+    fs.writeFileSync(mp3, Buffer.concat([Buffer.from('ID3'), Buffer.alloc(64, 1)]));
+    upsertDownloadedSong({ ...legacy!, filePath: mp3, fileSizeBytes: 67 });
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // ignore
+    }
+    assert.strictEqual(needsDownloadUpgrade(getDownloadedSong('vid99999999')!), false);
+  });
+
+  it('upgrades a legacy id-named file to a tagged MP3', async () => {
+    const ffmpeg = findExecutable('ffmpeg');
+    if (!ffmpeg) return;
+
+    resetDownloadsState();
+    deleteAllDownloadedSongs();
+    const dir = path.join(tmp, 'downloads');
+    fs.mkdirSync(dir, { recursive: true });
+    const src = path.join(dir, 'abcde123456.wav');
+    await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.25', '-y', src], { timeout: 20000 });
+    upsertDownloadedSong({
+      id: 'abcde123456',
+      title: 'Night Changes',
+      artist: 'One Direction',
+      album: 'Four',
+      durationMs: 250,
+      filePath: src,
+      fileSizeBytes: fs.statSync(src).size,
+      downloadedAt: Date.now(),
+      lastUsed: Date.now(),
+      source: 'local',
+    });
+
+    const n = await upgradeDownloadedLibrary();
+    assert.ok(n >= 1);
+    const upgraded = getDownloadedSong('abcde123456');
+    assert.ok(upgraded);
+    assert.strictEqual(path.basename(upgraded!.filePath), 'One Direction - Night Changes.mp3');
+    assert.strictEqual(fs.existsSync(src), false);
+    assert.ok(fs.existsSync(upgraded!.filePath));
+    const buf = fs.readFileSync(upgraded!.filePath);
+    assert.strictEqual(buf.subarray(0, 3).toString('ascii'), 'ID3');
+    const compact = Buffer.from(buf.filter((b) => b !== 0)).toString('latin1');
+    assert.ok(compact.includes('Night Changes'));
+    assert.ok(compact.includes('One Direction'));
+    assert.strictEqual(needsDownloadUpgrade(upgraded!), false);
+  });
 });
+
