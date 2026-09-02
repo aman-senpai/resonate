@@ -1,6 +1,6 @@
 {
   "name": "resonate-cli",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Terminal YouTube Music player with synchronized lyrics, procedural visualizers, album art, and truecolor themes",
   "main": "dist/index.js",
   "bin": {

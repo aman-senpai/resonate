@@ -720,7 +720,7 @@ describe('Seek, Album Art & Musical Note UX Fixes', () => {
   });
 });
 
-describe('Loop Shuffle Mute Speed Like Controls', () => {
+describe('Loop Shuffle Mute Speed Controls', () => {
   it('should mute, restore prior volume, and unmute on setVolume', () => {
     const player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
     player.setVolume(80);
@@ -742,7 +742,7 @@ describe('Loop Shuffle Mute Speed Like Controls', () => {
     player.destroy();
   });
 
-  it('should wire karaoke keys for loop, shuffle, mute, speed, and like', () => {
+  it('should wire karaoke keys for loop, shuffle, mute, speed, and downloads', () => {
     const app = new LyricalApp({ initialSong: globalSong, initialTheme: 'ytmusic' });
     const appSeam = app as unknown as {
       viewMode: string;
@@ -751,11 +751,9 @@ describe('Loop Shuffle Mute Speed Like Controls', () => {
       currentQueueIndex: number;
       player: LyricPlayer;
       handleKey: (key: { name?: string; sequence?: string }, str?: string) => void;
-      likeCurrentSong: () => Promise<void>;
     };
     appSeam.player.destroy();
     appSeam.player = new LyricPlayer(globalSong, new SimulatedAudioBackend());
-
 
     const extra = [
       { ...globalSong, id: 'track-a', title: 'A' },
@@ -791,13 +789,8 @@ describe('Loop Shuffle Mute Speed Like Controls', () => {
     appSeam.handleKey({ name: 'period' }, '.');
     assert.strictEqual(appSeam.player.getState().speed, baseSpeed);
 
-    let liked = false;
-    appSeam.likeCurrentSong = async () => {
-      liked = true;
-    };
-    appSeam.handleKey({ name: 'k' }, 'k');
-    assert.strictEqual(liked, true);
-    assert.strictEqual(appSeam.viewMode, 'karaoke');
+    appSeam.handleKey({ name: 'd' }, 'd');
+    assert.strictEqual(appSeam.viewMode, 'downloads');
   });
 
   it('should shuffle from the queue modal without closing it', () => {
@@ -843,7 +836,8 @@ describe('Loop Shuffle Mute Speed Like Controls', () => {
     assert.ok(/Shuffle/i.test(help));
     assert.ok(/Mute/i.test(help));
     assert.ok(/Speed/i.test(help));
-    assert.ok(/Like/i.test(help));
+    assert.ok(/Download/i.test(help));
+    assert.ok(!/Like current YouTube track/i.test(help));
     player.destroy();
   });
 });

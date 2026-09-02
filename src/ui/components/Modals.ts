@@ -1,6 +1,9 @@
-import { AuthCredentials, SearchResult, Song, Theme, YtExploreCategory, YtPlaylist, YtTrack } from '../../types.js';
+import { AuthCredentials, DownloadedSong, SearchResult, Song, Theme, YtExploreCategory, YtPlaylist, YtTrack } from '../../types.js';
 import { ANSI, bg, colorText, drawBox, fg, getVisualWidth, pad, sliceVisualEnd, truncate } from '../renderer.js';
 import { formatMusicalNoteText, isMusicalNoteLine } from './LyricsViewport.js';
+import { formatBytes } from '../../services/downloadManager.js';
+import { formatStorageLimit } from '../../services/config.js';
+
 export interface ModalDimensions {
   width: number;
   height: number;
@@ -365,6 +368,71 @@ export function renderAuthModal(
   });
 }
 
+export function renderDownloadsModal(
+  songs: DownloadedSong[],
+  selectedIndex: number,
+  theme: Theme,
+  dims: ModalDimensions,
+  opts: {
+    autoDownload: boolean;
+    maxStorageBytes: number;
+    usedBytes: number;
+    confirm: { mode: 'one' | 'all'; title?: string } | null;
+  }
+): string[] {
+  const modalW = Math.min(84, Math.max(28, dims.width - 4));
+  const modalH = Math.min(22, Math.max(10, dims.height - 4));
+  const contentW = modalW - 4;
+  const contentLines: string[] = [];
+
+  const used = formatBytes(opts.usedBytes);
+  const limit = formatStorageLimit(opts.maxStorageBytes);
+  const auto = opts.autoDownload ? colorText('AUTO ON', theme.accent, true) : colorText('AUTO OFF', theme.dimmed);
+  contentLines.push(truncate(` ${auto}   ${colorText(`${used} / ${limit}`, theme.secondary)}   ${colorText(`${songs.length} saved`, theme.subtle)}`, contentW));
+  contentLines.push(truncate(colorText(' Enter: play   d: delete   c: clear all   a: auto   +/-: limit   Esc: close', theme.subtle), contentW));
+  contentLines.push(colorText('─'.repeat(contentW), theme.subtle));
+
+  if (opts.confirm) {
+    const target = opts.confirm.mode === 'all'
+      ? `ALL ${songs.length} downloaded songs`
+      : `"${opts.confirm.title || 'this song'}"`;
+    contentLines.push('');
+    contentLines.push(colorText(`  Delete ${target}?`, [255, 180, 80], true));
+    contentLines.push(colorText('  y: confirm    n / Esc: cancel', theme.subtle));
+  } else if (songs.length === 0) {
+    contentLines.push(colorText('  No downloaded songs yet.', theme.dimmed));
+    contentLines.push(colorText('  Play a track with auto-download on to save highest-quality audio.', theme.subtle));
+  } else {
+    const listH = Math.max(1, modalH - 6);
+    const startIdx = Math.max(0, Math.min(selectedIndex - Math.floor(listH / 2), Math.max(0, songs.length - listH)));
+    const endIdx = Math.min(songs.length, startIdx + listH);
+    for (let i = startIdx; i < endIdx; i++) {
+      const s = songs[i];
+      const isSelected = i === selectedIndex;
+      const prefix = isSelected ? colorText('▶ ', theme.accent, true) : '  ';
+      const titleStr = isSelected
+        ? `${ANSI.BOLD}${fg([0, 0, 0])}${bg(theme.highlight)} ${s.title} ${ANSI.RESET}`
+        : colorText(s.title, theme.text);
+      const artistStr = colorText(` - ${s.artist}`, theme.dimmed);
+      const sizeStr = colorText(` ${formatBytes(s.fileSizeBytes)}`, theme.subtle);
+      contentLines.push(truncate(`${prefix}${titleStr}${artistStr}${sizeStr}`, contentW));
+    }
+  }
+
+  while (contentLines.length < modalH - 2) {
+    contentLines.push('');
+  }
+  if (contentLines.length > modalH - 2) {
+    contentLines.length = modalH - 2;
+  }
+
+  return drawBox(contentLines, modalW, theme.border, 'Downloaded Songs', {
+    text: `${songs.length} Offline`,
+    bg: theme.primary,
+    fg: [0, 0, 0],
+  });
+}
+
 export function renderHelpModal(theme: Theme, dims: ModalDimensions): string[] {
   const modalW = Math.min(84, Math.max(30, dims.width - 2));
   const modalH = Math.min(24, Math.max(12, dims.height - 2));
@@ -381,7 +449,7 @@ export function renderHelpModal(theme: Theme, dims: ModalDimensions): string[] {
     ['X', 'Shuffle remaining queue'],
     ['U', 'Mute / unmute'],
     [', / .', 'Speed − / + 0.25x'],
-    ['K', 'Like current YouTube track'],
+    ['D', 'Downloaded songs manager'],
     ['/ or S', 'Search YouTube & LRCLIB'],
     ['P or L', 'Playlists & Liked Songs'],
     ['Q', 'Playback Queue (d: remove)'],
@@ -390,7 +458,7 @@ export function renderHelpModal(theme: Theme, dims: ModalDimensions): string[] {
   ];
   const col2: Array<[string, string]> = [
     ['V', 'Cycle Visualizers (7 modes)'],
-    ['T / Shift+T', 'Cycle Color Themes'],
+    ['T / Shift+T', 'Cycle Color Themes (saved)'],
     ['A', 'Toggle Album Art on/off'],
     ['I', 'Toggle Timestamps on/off'],
     ['[ / ]', 'Sync Offset (-/+100ms)'],

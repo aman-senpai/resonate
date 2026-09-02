@@ -7,32 +7,40 @@ export interface HeaderOptions {
   state: PlayerState;
   theme: Theme;
   viewMode: string;
+  downloadedCount?: number;
 }
 
 export function renderHeader(opts: HeaderOptions): string[] {
   const { width, song, state, theme, viewMode } = opts;
+  const downloadedCount = opts.downloadedCount ?? 0;
   const lines: string[] = [];
 
   const bFg = fg(theme.border);
   const reset = ANSI.RESET;
   const innerWidth = Math.max(10, width - 2);
 
-  // Top border with App Logo and ViewMode
+  // Top border: download count (left), logo, view mode (right)
   const logo = ` RESONATE `;
   const modeBadge = ` [${viewMode.toUpperCase()}] `;
+  const dlText = ` ⬇ ${downloadedCount} `;
   const logoWidth = getVisualWidth(logo);
   const modeWidth = getVisualWidth(modeBadge);
+  const dlWidth = getVisualWidth(dlText);
 
   let headerTop: string;
-  if (innerWidth >= logoWidth + modeWidth + 2) {
-    const logoStyled = `${ANSI.BOLD}${gradientText(logo, theme.gradient, true)}${reset}`;
-    const modeStyled = colorText(modeBadge, theme.secondary, true);
-    const topFillLen = innerWidth - logoWidth - modeWidth - 2;
-    headerTop = `${bFg}╭─${reset}${logoStyled}${bFg}${'─'.repeat(topFillLen)}${reset}${modeStyled}${bFg}─╮${reset}`;
-  } else if (innerWidth >= logoWidth + 2) {
-    const logoStyled = `${ANSI.BOLD}${gradientText(logo, theme.gradient, true)}${reset}`;
-    const topFillLen = innerWidth - logoWidth - 2;
-    headerTop = `${bFg}╭─${reset}${logoStyled}${bFg}${'─'.repeat(topFillLen)}╮${reset}`;
+  const logoStyled = `${ANSI.BOLD}${gradientText(logo, theme.gradient, true)}${reset}`;
+  const modeStyled = colorText(modeBadge, theme.secondary, true);
+  const dlStyled = colorText(dlText, theme.accent, true);
+
+  if (innerWidth >= dlWidth + logoWidth + modeWidth + 3) {
+    const topFillLen = Math.max(0, innerWidth - dlWidth - logoWidth - modeWidth - 3);
+    headerTop = `${bFg}╭─${reset}${dlStyled}${bFg}─${reset}${logoStyled}${bFg}${'─'.repeat(topFillLen)}${reset}${modeStyled}${bFg}─╮${reset}`;
+  } else if (innerWidth >= dlWidth + logoWidth + 2) {
+    const topFillLen = Math.max(0, innerWidth - dlWidth - logoWidth - 2);
+    headerTop = `${bFg}╭─${reset}${dlStyled}${bFg}─${reset}${logoStyled}${bFg}${'─'.repeat(topFillLen)}╮${reset}`;
+  } else if (innerWidth >= dlWidth + 2) {
+    const topFillLen = Math.max(0, innerWidth - dlWidth - 2);
+    headerTop = `${bFg}╭─${reset}${dlStyled}${bFg}${'─'.repeat(topFillLen)}╮${reset}`;
   } else {
     headerTop = `${bFg}╭${'─'.repeat(innerWidth)}╮${reset}`;
   }

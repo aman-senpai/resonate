@@ -78,7 +78,7 @@ export interface PlayerState {
 
 export type VisualizerType = 'bars' | 'wave' | 'particles' | 'matrix' | 'flame' | 'pulse' | 'vinyl';
 
-export type ViewMode = 'karaoke' | 'reading' | 'help' | 'search' | 'playlists' | 'queue' | 'explore' | 'auth';
+export type ViewMode = 'karaoke' | 'reading' | 'help' | 'search' | 'playlists' | 'queue' | 'explore' | 'auth' | 'downloads';
 
 export interface SearchResult {
   id: string | number;
@@ -165,3 +165,26 @@ export interface TerminalDimensions {
   width: number;
   height: number;
 }
+
+export interface DownloadedSong {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  durationMs: number;
+  filePath: string;
+  fileSizeBytes: number;
+  downloadedAt: number;
+  lastUsed: number;
+  thumbnailUrl?: string;
+  rawLrc?: string;
+  plainLyrics?: string;
+  source?: 'youtube' | 'online' | 'local';
+}
+
+export interface AppConfig {
+  theme: string;
+  autoDownload: boolean;
+  maxStorageBytes: number;
+}
+

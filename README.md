@@ -26,12 +26,13 @@ Quote the title when it contains apostrophes (`don't`). Same thing: `resonate pl
 | | |
 | :--- | :--- |
 | `resonate` | Open the player |
-| `resonate "<song>"` | Search and play |
+| `resonate "<song>"` | Search and play (offline library first) |
 | `resonate play <query\|url>` | Same as a quoted title |
 | `resonate search [query]` | Search |
 | `resonate library` | Liked songs |
 | `resonate charts` | Trending |
 | `resonate playlist list` | Playlists |
+| `resonate downloads` | Offline library (list / clear / auto / limit) |
 | `resonate auth login --browser chrome` | Sign in |
 | `resonate themes` | List themes |
 
@@ -47,7 +48,7 @@ Quote the title when it contains apostrophes (`don't`). Same thing: `resonate pl
 | <kbd>X</kbd> | Toggle shuffle |
 | <kbd>U</kbd> | Mute / unmute |
 | <kbd>,</kbd> <kbd>.</kbd> | Speed − / + 0.25x |
-| <kbd>K</kbd> | Like track |
+| <kbd>D</kbd> | Downloads |
 | <kbd>/</kbd> | Search |
 | <kbd>Q</kbd> | Queue |
 | <kbd>V</kbd> | Visualizer |

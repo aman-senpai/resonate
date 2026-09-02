@@ -82,6 +82,7 @@ export function renderControlBar(opts: ControlBarOptions): string[] {
     `${colorText('/', theme.accent)}:Search`,
     `${colorText('P', theme.accent)}:Playlists`,
     `${colorText('Q', theme.accent)}:Queue`,
+    `${colorText('D', theme.accent)}:Downloads`,
     `${colorText('E', theme.accent)}:Explore`,
     `${colorText('R', theme.accent)}:Lyrics`,
     `${colorText('V', theme.accent)}:Visualizer`,

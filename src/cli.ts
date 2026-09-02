@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as readline from 'readline';
 import { fetchSongDetails, loadLocalLrcFile, searchLyrics } from './services/lyricsApi.js';
 import { clearAuthCredentials, importCookiesFromBrowser, loadAuthCredentials, saveAuthCredentials } from './services/auth.js';
 import { extractVideoId, getExploreFeed, getLikedSongs, getUserPlaylists, getYtMusicClient, getYtPlaylist } from './services/ytmusic.js';
@@ -7,6 +8,15 @@ import { LyricalApp } from './app.js';
 import { AuthCredentials, Song, ViewMode, YtPlaylist } from './types.js';
 import { THEMES } from './ui/themes.js';
 import { ANSI, colorText, gradientText, pad } from './ui/renderer.js';
+import { formatStorageLimit, getConfig, parseStorageBytes, saveConfig } from './services/config.js';
+import {
+  deleteAllDownloadedSongs,
+  findDownloadedMatch,
+  formatBytes,
+  getDownloadedSongs,
+  getTotalDownloadedBytes,
+  toPlayableSong,
+} from './services/downloadManager.js';
 
 export async function runCli(args: string[]): Promise<void> {
   const flags: Record<string, string | boolean | number> = {};
@@ -89,6 +99,13 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
 
+  // Subcommand: downloads / dl
+  if (command === 'downloads' || command === 'dl') {
+    await handleDownloadsCommand(positional.slice(1), flags);
+    return;
+  }
+
+
   // Subcommand: search / find — TUI combobox with live suggestions
   if (command === 'search' || command === 'find') {
     await runSearchCli(positional.slice(1).join(' '), flags);
@@ -128,7 +145,16 @@ export async function runCli(args: string[]): Promise<void> {
       }
     }
 
-    // 2. Check if argument is a YouTube Music URL or Video ID
+    // 2. Play from offline library first (title, artist, or video id)
+    if (!targetSong) {
+      const offline = findDownloadedMatch(queryArg);
+      if (offline) {
+        targetSong = toPlayableSong(offline);
+        console.log(colorText(`✓ Playing offline: ${offline.title} - ${offline.artist}`, [30, 215, 96]));
+      }
+    }
+
+    // 3. Check if argument is a YouTube Music URL or Video ID
     if (!targetSong) {
       const videoId = extractVideoId(queryArg);
       if (videoId && videoId.length === 11) {
@@ -151,7 +177,7 @@ export async function runCli(args: string[]): Promise<void> {
       }
     }
 
-    // 3. Search online on YouTube Music & LRCLIB
+    // 4. Search online on YouTube Music & LRCLIB
     if (!targetSong) {
       console.log(colorText(`⟳ Searching YouTube Music & LRCLIB for "${queryArg}"...`, [255, 0, 51]));
       const searchRes = await searchLyrics(queryArg);
@@ -186,11 +212,12 @@ function launchInteractiveApp(
     initialSearchQuery?: string;
   } = {}
 ): void {
-  const themeName = (typeof flags['theme'] === 'string' && flags['theme']) || (typeof flags['t'] === 'string' && flags['t']) || 'ytmusic';
+  const themeFlag = (typeof flags['theme'] === 'string' && flags['theme']) || (typeof flags['t'] === 'string' && flags['t']) || '';
   const speed = typeof flags['speed'] === 'number' ? flags['speed'] : 1.0;
+  if (themeFlag) saveConfig({ theme: String(themeFlag) });
   const app = new LyricalApp({
     initialSong: opts.initialSong,
-    initialTheme: themeName,
+    initialTheme: themeFlag || undefined,
     autoPlay: opts.autoPlay ?? true,
     speed,
     initialSearchQuery: opts.initialSearchQuery,
@@ -525,6 +552,88 @@ async function runGetCli(query: string): Promise<void> {
   }
 }
 
+async function confirmYes(prompt: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) => {
+    rl.question(prompt, resolve);
+  });
+  rl.close();
+  const t = answer.trim().toLowerCase();
+  return t === 'y' || t === 'yes';
+}
+
+async function handleDownloadsCommand(args: string[], flags: Record<string, string | boolean | number>): Promise<void> {
+  const sub = args[0]?.toLowerCase();
+
+  if (!sub || sub === 'open' || sub === 'ui') {
+    launchInteractiveApp(flags, { startView: 'downloads', autoPlay: false });
+    return;
+  }
+
+  if (sub === 'list') {
+    const songs = getDownloadedSongs();
+    const used = getTotalDownloadedBytes();
+    const cfg = getConfig();
+    console.log(colorText(`Downloaded: ${songs.length}  ${formatBytes(used)} / ${formatStorageLimit(cfg.maxStorageBytes)}  auto=${cfg.autoDownload ? 'on' : 'off'}`, [255, 215, 0]));
+    if (songs.length === 0) {
+      console.log(colorText('  (empty)', [160, 160, 160]));
+      return;
+    }
+    for (const s of songs) {
+      console.log(`  ${s.title} - ${s.artist}  ${colorText(formatBytes(s.fileSizeBytes), [160, 160, 160])}`);
+    }
+    return;
+  }
+
+  if (sub === 'clear') {
+    const songs = getDownloadedSongs();
+    if (songs.length === 0) {
+      console.log(colorText('No downloaded songs.', [160, 160, 160]));
+      return;
+    }
+    const force = Boolean(flags['yes'] || flags['y']);
+    if (!force) {
+      const ok = await confirmYes(`Delete ${songs.length} downloaded song${songs.length === 1 ? '' : 's'} (${formatBytes(getTotalDownloadedBytes())})? [y/N] `);
+      if (!ok) {
+        console.log('Cancelled.');
+        return;
+      }
+    }
+    const n = deleteAllDownloadedSongs();
+    console.log(colorText(`Deleted ${n} downloaded song${n === 1 ? '' : 's'}.`, [30, 215, 96]));
+    return;
+  }
+
+  if (sub === 'auto') {
+    const val = (args[1] || '').toLowerCase();
+    let next: boolean;
+    if (val === 'on' || val === 'true' || val === '1') next = true;
+    else if (val === 'off' || val === 'false' || val === '0') next = false;
+    else next = !getConfig().autoDownload;
+    saveConfig({ autoDownload: next });
+    console.log(colorText(`Auto-download: ${next ? 'ON' : 'OFF'}`, [30, 215, 96]));
+    return;
+  }
+
+  if (sub === 'limit') {
+    const raw = args[1];
+    if (!raw) {
+      console.log(`Download limit: ${formatStorageLimit(getConfig().maxStorageBytes)} (default 2 GB)`);
+      return;
+    }
+    const bytes = parseStorageBytes(raw);
+    if (!bytes || bytes < 512 * 1024 * 1024) {
+      console.log(colorText('Error: limit must be at least 512MB. Example: resonate downloads limit 2G', [255, 100, 100]));
+      process.exit(1);
+    }
+    saveConfig({ maxStorageBytes: bytes });
+    console.log(colorText(`Download limit: ${formatStorageLimit(bytes)}`, [30, 215, 96]));
+    return;
+  }
+
+  console.log(colorText('Usage: resonate downloads [list|clear|auto|limit|open]', [255, 100, 100]));
+}
+
 function printThemes(): void {
   console.log(colorText('═══ Available Color Themes ═══', [255, 0, 51]));
   for (const t of Object.values(THEMES)) {
@@ -537,7 +646,8 @@ function printThemes(): void {
 }
 
 function printVersion(): void {
-  console.log('Resonate YouTube Music CLI v1.1.1');
+  console.log('Resonate YouTube Music CLI v1.2.0');
+
 }
 
 function printHelp(): void {
@@ -556,7 +666,9 @@ ${ANSI.BOLD}COMMANDS:${ANSI.RESET}
   ${colorText('resonate charts / explore', [255, 215, 0])}        Open Top Charts & Trending TUI
   ${colorText('resonate auth <login|status|logout>', [255, 215, 0])} Manage YouTube Music authentication
   ${colorText('resonate get <query>', [255, 215, 0])}             Dump synchronized LRC lyrics to stdout
+  ${colorText('resonate downloads [list|clear|auto|limit]', [255, 215, 0])} Offline library
   ${colorText('resonate themes', [255, 215, 0])}                  List all available TrueColor themes
+
 
 ${ANSI.BOLD}OPTIONS:${ANSI.RESET}
   ${colorText('--theme, -t <name>', [30, 215, 96])}          Set visual theme (ytmusic, spotify, cyberpunk, nord, tokyonight, etc.)
@@ -582,7 +694,7 @@ ${ANSI.BOLD}PLAYER CONTROLS:${ANSI.RESET}
   ${colorText('X', [255, 215, 0])}           Toggle shuffle for upcoming queue
   ${colorText('U', [255, 215, 0])}           Toggle mute on / off
   ${colorText(', / .', [255, 215, 0])}       Adjust playback speed (-0.25x / +0.25x)
-  ${colorText('K', [255, 215, 0])}           Like current YouTube track
+  ${colorText('D', [255, 215, 0])}           Open downloaded songs manager
   ${colorText('/ or S', [255, 215, 0])}      Open live YouTube Music search
   ${colorText('P or L', [255, 215, 0])}      Open Playlists & Library
   ${colorText('Q', [255, 215, 0])}           Open Playback Queue & Up Next (d: delete)

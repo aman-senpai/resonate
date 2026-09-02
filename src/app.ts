@@ -10,6 +10,7 @@ import { renderControlBar } from './ui/components/ControlBar.js';
 import { renderAlbumArt } from './ui/components/AlbumArt.js';
 import {
   renderAuthModal,
+  renderDownloadsModal,
   renderExploreModal,
   renderHelpModal,
   renderPlaylistModal,
@@ -18,9 +19,24 @@ import {
   renderSearchModal,
 } from './ui/components/Modals.js';
 import { fetchSongDetails, searchLyrics } from './services/lyricsApi.js';
-import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, isStreamRef, prefetchAudioStream, rateSong, searchYtMusic } from './services/ytmusic.js';
+import { ensurePlayableSong, getExploreFeed, getLikedSongs, getSearchAutocomplete, getTrendingSuggestions, getUserPlaylists, getYtPlaylist, getYtUpNext, isStreamRef, prefetchAudioStream, searchYtMusic } from './services/ytmusic.js';
 import { getAlbumArtAnsi } from './services/albumArt.js';
 import { loadAuthCredentials } from './services/auth.js';
+import { formatStorageLimit, getConfig, saveConfig } from './services/config.js';
+import {
+  deleteAllDownloadedSongs,
+  deleteDownloadedSong,
+  downloadSong,
+  findDownloadedMatch,
+  getDownloadedCount,
+  getDownloadedSong,
+  getDownloadedSongs,
+  getTotalDownloadedBytes,
+  isSongDownloaded,
+  toPlayableSong,
+  touchDownloadedSong,
+} from './services/downloadManager.js';
+
 import { formatMsToTime } from './parser/lrc.js';
 
 export interface AppOptions {
@@ -79,6 +95,11 @@ export class LyricalApp {
   // Reading view state
   private readingScrollOffset: number = 0;
 
+  // Downloads manager
+  private downloadsSelectedIndex: number = 0;
+  private downloadsConfirm: { mode: 'one' | 'all'; id?: string; title?: string } | null = null;
+
+
   // Auth info
   private authCreds: AuthCredentials | null = null;
   private notificationMessage: string | null = null;
@@ -87,7 +108,7 @@ export class LyricalApp {
   constructor(opts: AppOptions = {}) {
     this.screen = new ScreenBuffer();
     this.visualizer = new AudioVisualizer('bars');
-    this.themeManager = new ThemeManager(opts.initialTheme || 'ytmusic');
+    this.themeManager = new ThemeManager(opts.initialTheme || getConfig().theme || 'ytmusic');
 
     const initialSong = opts.initialSong || {
       id: '',
@@ -123,6 +144,8 @@ export class LyricalApp {
       this.openPlaylistsModal();
     } else if (opts.startView === 'explore') {
       this.openExploreModal();
+    } else if (opts.startView === 'downloads') {
+      this.openDownloadsModal();
     } else if (opts.startView === 'search' || !opts.initialSong) {
       this.openSearchModal();
     }
@@ -255,6 +278,12 @@ export class LyricalApp {
       return;
     }
 
+    if (this.viewMode === 'downloads') {
+      this.handleDownloadsInput(key, str);
+      return;
+    }
+
+
 
     if (this.viewMode === 'reading') {
       this.handleReadingInput(key);
@@ -295,6 +324,12 @@ export class LyricalApp {
       return;
     }
 
+    // Downloads manager: 'd'
+    if (ch === 'd' || ch === 'D' || name === 'd') {
+      this.openDownloadsModal();
+      return;
+    }
+
     // Reading Lyrics Toggle: 'r' or 'm'
     if (ch === 'r' || ch === 'R' || ch === 'm' || ch === 'M' || name === 'r' || name === 'm') {
       this.viewMode = (this.viewMode as string) === 'reading' ? 'karaoke' : 'reading';
@@ -315,6 +350,7 @@ export class LyricalApp {
       } else {
         this.themeManager.nextTheme();
       }
+      saveConfig({ theme: this.themeManager.getTheme().id });
       this.showNotification(`★ Theme: ${this.themeManager.getTheme().name}`, 1500);
       return;
     }
@@ -426,11 +462,7 @@ export class LyricalApp {
       return;
     }
 
-    // Like Song: 'k'
-    if (ch === 'k' || ch === 'K' || name === 'k') {
-      void this.likeCurrentSong();
-      return;
-    }
+
 
     // Tab -> Open Search Modal
     if (name === 'tab') {
@@ -452,25 +484,53 @@ export class LyricalApp {
   }
 
   public async playSong(song: Song): Promise<void> {
-    const existingIdx = this.queue.findIndex((s) => s.id === song.id);
+    const query = `${song.title || ''} ${song.artist || ''}`.trim();
+    const local = (song.id ? getDownloadedSong(song.id) : undefined)
+      || (query ? findDownloadedMatch(query) : undefined)
+      || (song.title ? findDownloadedMatch(song.title) : undefined);
+
+    let playable = song;
+    if (local) {
+      playable = toPlayableSong(local);
+      if (song.lyrics && song.lyrics.length > 0) {
+        playable.lyrics = song.lyrics;
+        playable.plainLyrics = song.plainLyrics || playable.plainLyrics;
+      }
+      playable.thumbnailUrl = playable.thumbnailUrl || song.thumbnailUrl;
+      playable.art = song.art;
+      playable.coverColor = song.coverColor;
+      touchDownloadedSong(local.id);
+    }
+
+    const existingIdx = this.queue.findIndex((s) => s.id === playable.id || s.id === song.id);
     if (existingIdx !== -1) {
       this.currentQueueIndex = existingIdx;
-      this.queue[existingIdx] = song;
+      this.queue[existingIdx] = playable;
     } else {
-      this.queue.push(song);
+      this.queue.push(playable);
       this.currentQueueIndex = this.queue.length - 1;
     }
 
-    await ensurePlayableSong(song);
-    const playTarget = song.audioUrl && isStreamRef(song.audioUrl) ? song.audioUrl : song.id;
-    if (isStreamRef(playTarget)) prefetchAudioStream(playTarget);
-    await this.player.loadSong(song, true);
-    this.fetchArtForSong(song);
+    if (!local) {
+      await ensurePlayableSong(playable);
+      const playTarget = playable.audioUrl && isStreamRef(playable.audioUrl) ? playable.audioUrl : playable.id;
+      if (isStreamRef(playTarget)) prefetchAudioStream(playTarget);
+    }
+
+    await this.player.loadSong(playable, true);
+    this.fetchArtForSong(playable);
     this.prefetchNeighbors();
 
     const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
       ? song.id
-      : (song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl) ? song.audioUrl : '');
+      : (playable.id && /^[a-zA-Z0-9_-]{11}$/.test(playable.id) ? playable.id : '');
+
+    if (getConfig().autoDownload && ytId && !isSongDownloaded(ytId) && !local) {
+      void downloadSong({ ...playable, id: ytId }).then((d) => {
+        if (d) this.showNotification(`⬇ Saved offline: ${d.title}`, 2000);
+      });
+    }
+
     if (ytId) {
       getYtUpNext(ytId).then((related) => {
         for (const item of related.slice(0, 5)) {
@@ -495,6 +555,7 @@ export class LyricalApp {
       }).catch(() => {});
     }
   }
+
 
   private nextTrack(): void {
     if (this.queue.length === 0) return;
@@ -545,26 +606,106 @@ export class LyricalApp {
     this.showNotification(`Shuffle: ${this.shuffleEnabled ? 'ON' : 'OFF'}`, 1500);
   }
 
-  private async likeCurrentSong(): Promise<void> {
-    const song = this.player.getCurrentSong();
-    if (!song) {
-      this.showNotification('Cannot like: no song playing');
+  private openDownloadsModal(): void {
+    this.viewMode = 'downloads';
+    this.downloadsSelectedIndex = 0;
+    this.downloadsConfirm = null;
+  }
+
+  private handleDownloadsInput(key: readline.Key, str: string = ''): void {
+    const name = (key.name || '').toLowerCase();
+    let ch = str || key.sequence || '';
+    if (!ch && name.length === 1 && !key.ctrl && !key.meta) {
+      ch = key.shift ? name.toUpperCase() : name;
+    }
+
+    if (this.downloadsConfirm) {
+      if (name === 'y' || ch === 'y' || ch === 'Y') {
+        if (this.downloadsConfirm.mode === 'all') {
+          const n = deleteAllDownloadedSongs();
+          this.showNotification(`Deleted ${n} downloaded song${n === 1 ? '' : 's'}`, 2000);
+        } else if (this.downloadsConfirm.id) {
+          const title = this.downloadsConfirm.title || 'song';
+          deleteDownloadedSong(this.downloadsConfirm.id);
+          this.showNotification(`Deleted "${title}"`, 2000);
+        }
+        this.downloadsConfirm = null;
+        const remaining = getDownloadedSongs();
+        this.downloadsSelectedIndex = Math.min(this.downloadsSelectedIndex, Math.max(0, remaining.length - 1));
+        return;
+      }
+      if (name === 'n' || ch === 'n' || ch === 'N' || name === 'escape') {
+        this.downloadsConfirm = null;
+        return;
+      }
       return;
     }
-    const ytId = /^[a-zA-Z0-9_-]{11}$/.test(song.id)
-      ? song.id
-      : (song.audioUrl && /^[a-zA-Z0-9_-]{11}$/.test(song.audioUrl) ? song.audioUrl : '');
-    if (!ytId) {
-      this.showNotification('Cannot like: not a YouTube track');
+
+    if (name === 'escape' || ch === '\x1b') {
+      this.viewMode = 'karaoke';
       return;
     }
-    const success = await rateSong(ytId, 'LIKE');
-    if (success) {
-      this.showNotification(`Liked: ${song.title}`);
-    } else {
-      this.showNotification('Failed to like (login with YouTube Music auth)');
+
+    const songs = getDownloadedSongs();
+    if (name === 'up') {
+      this.downloadsSelectedIndex = Math.max(0, this.downloadsSelectedIndex - 1);
+      return;
+    }
+    if (name === 'down') {
+      this.downloadsSelectedIndex = Math.min(Math.max(0, songs.length - 1), this.downloadsSelectedIndex + 1);
+      return;
+    }
+
+    if (name === 'return' || name === 'enter' || ch === '\r' || ch === '\n') {
+      const item = songs[this.downloadsSelectedIndex];
+      if (item) {
+        this.viewMode = 'karaoke';
+        void this.playSong(toPlayableSong(item));
+        this.showNotification(`▶ Offline: ${item.title} - ${item.artist}`);
+      }
+      return;
+    }
+
+    if (ch === 'd' || name === 'd' || name === 'delete' || name === 'backspace') {
+      const item = songs[this.downloadsSelectedIndex];
+      if (item) {
+        this.downloadsConfirm = { mode: 'one', id: item.id, title: item.title };
+      }
+      return;
+    }
+
+    if (ch === 'c' || ch === 'C' || name === 'c') {
+      if (songs.length === 0) {
+        this.showNotification('No downloaded songs to clear', 1500);
+        return;
+      }
+      this.downloadsConfirm = { mode: 'all' };
+      return;
+    }
+
+    if (ch === 'a' || ch === 'A' || name === 'a') {
+      const next = !getConfig().autoDownload;
+      saveConfig({ autoDownload: next });
+      this.showNotification(`Auto-download: ${next ? 'ON' : 'OFF'}`, 1500);
+      return;
+    }
+
+    if (ch === '+' || ch === '=' || name === 'equal') {
+      const cur = getConfig().maxStorageBytes;
+      const next = Math.min(50 * 1024 ** 3, cur + 512 * 1024 ** 2);
+      saveConfig({ maxStorageBytes: next });
+      this.showNotification(`Download limit: ${formatStorageLimit(next)}`, 1500);
+      return;
+    }
+    if (ch === '-' || name === 'minus') {
+      const cur = getConfig().maxStorageBytes;
+      const next = Math.max(512 * 1024 ** 2, cur - 512 * 1024 ** 2);
+      saveConfig({ maxStorageBytes: next });
+      this.showNotification(`Download limit: ${formatStorageLimit(next)}`, 1500);
+      return;
     }
   }
+
 
   private async fetchArtForSong(song: Song): Promise<void> {
     if (!song) return;
@@ -990,6 +1131,7 @@ export class LyricalApp {
       state,
       theme,
       viewMode: this.viewMode,
+      downloadedCount: getDownloadedCount(),
     });
 
     // 2. Render Control Bar (5 lines)
@@ -1113,6 +1255,18 @@ export class LyricalApp {
       );
     } else if (this.viewMode === 'help') {
       middleLines = this.fitModalInViewport(renderHelpModal(theme, viewportDims), width, viewportHeight);
+    } else if (this.viewMode === 'downloads') {
+      const cfg = getConfig();
+      middleLines = this.fitModalInViewport(
+        renderDownloadsModal(getDownloadedSongs(), this.downloadsSelectedIndex, theme, viewportDims, {
+          autoDownload: cfg.autoDownload,
+          maxStorageBytes: cfg.maxStorageBytes,
+          usedBytes: getTotalDownloadedBytes(),
+          confirm: this.downloadsConfirm,
+        }),
+        width,
+        viewportHeight
+      );
     }
 
     while (middleLines.length < viewportHeight) {
