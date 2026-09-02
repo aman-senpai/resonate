@@ -16,7 +16,6 @@ import {
   getDownloadedSongs,
   getTotalDownloadedBytes,
   toPlayableSong,
-  upgradeDownloadedLibrary,
 } from './services/downloadManager.js';
 
 export async function runCli(args: string[]): Promise<void> {
@@ -565,8 +564,6 @@ async function confirmYes(prompt: string): Promise<boolean> {
 
 async function handleDownloadsCommand(args: string[], flags: Record<string, string | boolean | number>): Promise<void> {
   const sub = args[0]?.toLowerCase();
-  void upgradeDownloadedLibrary();
-
   if (!sub || sub === 'open' || sub === 'ui') {
     launchInteractiveApp(flags, { startView: 'downloads', autoPlay: false });
     return;
@@ -648,7 +645,7 @@ function printThemes(): void {
 }
 
 function printVersion(): void {
-  console.log('Resonate YouTube Music CLI v1.2.5');
+  console.log('Resonate YouTube Music CLI v1.2.6');
 }
 
 function printHelp(): void {

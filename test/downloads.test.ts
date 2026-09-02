@@ -29,7 +29,7 @@ import {
   sanitizeFilename,
   toPlayableSong,
   uniqueDownloadPath,
-  upgradeDownloadedLibrary,
+  upgradeLegacyDownloads,
   upgradeThumbnailUrl,
   upsertDownloadedSong,
 } from '../src/services/downloadManager.js';
@@ -321,7 +321,7 @@ describe('Download filenames and metadata', () => {
       source: 'local',
     });
 
-    const n = await upgradeDownloadedLibrary();
+    const n = await upgradeLegacyDownloads();
     assert.ok(n >= 1);
     const upgraded = getDownloadedSong('abcde123456');
     assert.ok(upgraded);

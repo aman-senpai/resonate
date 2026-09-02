@@ -647,17 +647,7 @@ export function needsDownloadUpgrade(entry: DownloadedSong): boolean {
   const expected = downloadBasename(entry.artist || '', entry.title || '');
   const taggedName = `${expected} [${sanitizeFilename(entry.id)}]`;
   const nameOk = parsed.name === expected || parsed.name === taggedName;
-  const isMp3 = parsed.ext.toLowerCase() === '.mp3';
-  if (!isMp3 || !nameOk) return true;
-  try {
-    const fd = fs.openSync(entry.filePath, 'r');
-    const buf = Buffer.alloc(3);
-    const n = fs.readSync(fd, buf, 0, 3, 0);
-    fs.closeSync(fd);
-    return n < 3 || buf.toString('ascii') !== 'ID3';
-  } catch {
-    return true;
-  }
+  return parsed.ext.toLowerCase() !== '.mp3' || !nameOk;
 }
 
 export async function upgradeDownloadedSong(entry: DownloadedSong): Promise<DownloadedSong | null> {
@@ -732,11 +722,16 @@ export async function upgradeDownloadedSong(entry: DownloadedSong): Promise<Down
   }
 }
 
-export function upgradeDownloadedLibrary(): Promise<number> {
+export function upgradeLegacyDownloads(playing?: { id?: string; audioUrl?: string } | null): Promise<number> {
   if (upgradeInFlight) return upgradeInFlight;
+  const skipId = playing?.id;
+  const skipFile =
+    playing?.audioUrl && !playing.audioUrl.includes('://') ? path.resolve(playing.audioUrl) : '';
   const work = (async () => {
     let n = 0;
     for (const song of getDownloadedSongs()) {
+      if (skipId && song.id === skipId) continue;
+      if (skipFile && path.resolve(song.filePath) === skipFile) continue;
       if (!needsDownloadUpgrade(song)) continue;
       const next = await upgradeDownloadedSong(song);
       if (next && !needsDownloadUpgrade(next)) n += 1;
