@@ -48,6 +48,7 @@ export class LyricPlayer extends EventEmitter {
       this.backend.on('status', (state: { status: 'playing' | 'paused' | 'stopped' | 'ended'; currentMs: number; volume: number; spectrum?: number[] }) => {
         if (this.status === 'playing') {
           this.seekHold = false;
+          this.isBuffering = false;
           this.currentTimeMs = state.currentMs;
           this.lastHighResTimestamp = performance.now();
           this.lastBackendSyncAt = this.lastHighResTimestamp;
@@ -60,10 +61,11 @@ export class LyricPlayer extends EventEmitter {
       });
 
       this.backend.on('ended', () => {
+        // The backend only reports a clean end after real playback progress;
+        // failed starts are retried or surfaced as errors instead of silently
+        // freezing on a false "playing" state.
         if (this.status === 'playing') {
-          if (this.durationMs <= 0 || this.currentTimeMs >= Math.max(0, this.durationMs - 2500)) {
-            this.onPlaybackEnded();
-          }
+          this.onPlaybackEnded();
         }
       });
 
@@ -80,19 +82,35 @@ export class LyricPlayer extends EventEmitter {
   }
 
   public async loadSong(song: Song, autoPlay: boolean = false): Promise<void> {
-    this.stop();
-    this.song = song;
-    this.durationMs = song.durationMs;
-    this.currentTimeMs = 0;
-    this.activeLineIndex = -1;
-    this.activeWordIndex = -1;
+    // Switching tracks while something is playing: resolve the incoming stream
+    // first so the outgoing audio keeps playing until the new one is ready.
+    if (autoPlay && this.status !== 'stopped') {
+      this.applySong(song);
+      this.isBuffering = true;
+      this.emitStateChange();
+      try {
+        await this.backend.prepare(this.targetFor(song));
+      } catch {
+        // play() re-resolves and surfaces any error.
+      }
+    }
 
-    this.updateActiveIndices();
+    this.stop();
+    this.applySong(song);
     this.emitStateChange();
 
     if (autoPlay) {
       await this.play();
     }
+  }
+
+  private applySong(song: Song): void {
+    this.song = song;
+    this.durationMs = song.durationMs;
+    this.currentTimeMs = 0;
+    this.activeLineIndex = -1;
+    this.activeWordIndex = -1;
+    this.updateActiveIndices();
   }
 
   public getCurrentSong(): Song | null {
@@ -122,18 +140,22 @@ export class LyricPlayer extends EventEmitter {
 
     const playTarget = this.playableTarget();
     this.status = 'playing';
+    this.isBuffering = true;
     this.lastHighResTimestamp = performance.now();
     this.lastBackendSyncAt = this.lastHighResTimestamp;
+    this.emitStateChange();
 
     try {
       await this.backend.play(playTarget, this.currentTimeMs);
     } catch (err: unknown) {
+      this.isBuffering = false;
       this.status = 'paused';
       this.emit('error', err instanceof Error ? err : new Error(String(err)));
       this.emitStateChange();
       return;
     }
 
+    this.isBuffering = false;
     this.lastHighResTimestamp = performance.now();
     this.lastBackendSyncAt = this.lastHighResTimestamp;
     clearInterval(this.timerHandle!);
@@ -146,6 +168,7 @@ export class LyricPlayer extends EventEmitter {
 
     this.status = 'paused';
     this.seekHold = false;
+    this.isBuffering = false;
     this.backend.pause();
 
     clearInterval(this.timerHandle!);
@@ -164,6 +187,7 @@ export class LyricPlayer extends EventEmitter {
   public stop(): void {
     this.status = 'stopped';
     this.seekHold = false;
+    this.isBuffering = false;
     this.backend.stop();
 
     clearInterval(this.timerHandle!);
@@ -198,11 +222,14 @@ export class LyricPlayer extends EventEmitter {
     this.emitStateChange();
   }
 
-  private playableTarget(): string {
-    if (!this.song) return '';
-    if (this.song.audioUrl && isStreamRef(this.song.audioUrl)) return this.song.audioUrl;
-    if (isStreamRef(this.song.id)) return this.song.id;
+  private targetFor(song: Song): string {
+    if (song.audioUrl && isStreamRef(song.audioUrl)) return song.audioUrl;
+    if (isStreamRef(song.id)) return song.id;
     return '';
+  }
+
+  private playableTarget(): string {
+    return this.song ? this.targetFor(this.song) : '';
   }
 
   public seekDelta(deltaMs: number): void {
@@ -359,6 +386,7 @@ export class LyricPlayer extends EventEmitter {
   }
 
   private onPlaybackEnded(): void {
+    this.isBuffering = false;
     if (this.loop) {
       this.currentTimeMs = 0;
       this.seek(0);

@@ -285,7 +285,7 @@ export function prefetchAudioStream(videoIdOrUrl: string): void {
   void resolveAudioStreamUrl(videoIdOrUrl).catch(() => {});
 }
 
-export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<string> {
+export async function resolveAudioStreamUrl(videoIdOrUrl: string, forceFresh: boolean = false): Promise<string> {
   const trimmed = videoIdOrUrl.trim();
   if (trimmed.startsWith('/') || trimmed.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(trimmed)) {
     return trimmed;
@@ -293,10 +293,12 @@ export async function resolveAudioStreamUrl(videoIdOrUrl: string): Promise<strin
 
   const key = streamCacheKey(trimmed);
   const file = /^[a-zA-Z0-9_-]{11}$/.test(key) ? getCachedMediaPath(key) : undefined;
-  if (file) return file;
+  if (file && !forceFresh) return file;
 
-  const cached = cachedStreamUrl(trimmed);
-  if (cached) return cached;
+  if (!forceFresh) {
+    const cached = cachedStreamUrl(trimmed);
+    if (cached) return cached;
+  }
 
   const pending = inflightStreams.get(key);
   if (pending) return pending;

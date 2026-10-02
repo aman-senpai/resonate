@@ -12,6 +12,8 @@ export interface AudioBackendEvents {
 
 export interface IAudioBackend {
   play(url: string, startMs?: number): Promise<void>;
+  /** Resolve/warm the stream for a track without disturbing the current playback. */
+  prepare(url: string): Promise<void>;
   pause(): void;
   resume(): void;
   seek(targetMs: number): void;
@@ -22,6 +24,19 @@ export interface IAudioBackend {
   getName(): string;
 }
 
+
+/**
+ * ffplay exits with code 0 even when it cannot open its input (missing file,
+ * expired/403 stream URL), which is indistinguishable from a finished song by
+ * exit code alone. A clean exit before any real playback progress therefore
+ * means the process failed to start rather than completing.
+ */
+const START_FAILURE_THRESHOLD_MS = 1500;
+const MAX_START_RETRIES = 2;
+
+export function isFailedStart(code: number | null, progressedMs: number): boolean {
+  return code !== 0 || progressedMs < START_FAILURE_THRESHOLD_MS;
+}
 
 export type PlayerKind =
   | 'ffplay'
@@ -221,6 +236,8 @@ export class SimulatedAudioBackend extends EventEmitter implements IAudioBackend
     this.startClock();
   }
 
+  public async prepare(_url: string): Promise<void> {}
+
   public pause(): void {
     this.status = 'paused';
     this.stopClock();
@@ -306,35 +323,48 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private frozen: boolean = false;
   private volumeTimers: NodeJS.Timeout[] = [];
   private cacheWatch: NodeJS.Timeout | null = null;
+  private sessionStartMs: number = 0;
+  private startFailures: number = 0;
 
   constructor() {
     super();
     this.spec = detectPlayer();
   }
 
+  public async prepare(urlOrId: string): Promise<void> {
+    if (!urlOrId || urlOrId === 'simulated' || !isStreamRef(urlOrId)) return;
+    await resolveAudioStreamUrl(urlOrId);
+  }
+
   public async play(urlOrId: string, startMs: number = 0): Promise<void> {
-    this.killProc();
     this.currentTarget = urlOrId || '';
     this.currentMs = Math.max(0, startMs);
     this.lastTime = Date.now();
+    this.startFailures = 0;
     const sessionId = ++this.playSessionId;
 
     if (!this.currentTarget || this.currentTarget === 'simulated' || !isStreamRef(this.currentTarget)) {
+      this.killProc();
       this.status = 'playing';
       this.startClock();
       return;
     }
 
     if (!this.spec) {
+      this.killProc();
       this.status = 'paused';
       const error = new Error('No audio engine (install ffmpeg or mpv)');
       this.emit('error', error);
       throw error;
     }
 
+    // Keep the outgoing track audible while the incoming stream resolves; only
+    // its clock is stopped so it cannot feed stale positions to the player.
+    this.stopClock();
     try {
       const streamUrl = await resolveAudioStreamUrl(this.currentTarget);
       if (sessionId !== this.playSessionId) return;
+      this.killProc();
       this.currentStreamUrl = streamUrl;
       this.status = 'playing';
       await this.spawnPlayer(streamUrl, this.currentMs, sessionId);
@@ -343,6 +373,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       this.startCacheWatch();
     } catch (err: unknown) {
       if (sessionId !== this.playSessionId) return;
+      this.killProc();
       this.status = 'paused';
       this.stopClock();
       const error = err instanceof Error ? err : new Error(String(err));
@@ -439,6 +470,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
   private async spawnPlayer(streamUrl: string, startMs: number, sessionId: number): Promise<void> {
     if (!this.spec) throw new Error('No audio engine');
     this.killProc();
+    this.sessionStartMs = this.currentMs;
 
     const generation = ++this.spawnGeneration;
     const args = this.playerArgs(streamUrl, startMs, this.spec.kind);
@@ -535,14 +567,17 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     this.sinkProc = null;
     this.frozen = false;
 
-    if (code === 0) {
+    const progressed = this.currentMs - this.sessionStartMs;
+    const failedStart = isFailedStart(code, progressed);
+
+    if (!failedStart) {
       this.status = 'ended';
       this.stopClock();
       this.emit('ended');
       return;
     }
 
-    if (this.retrying) {
+    if (this.retrying || this.startFailures >= MAX_START_RETRIES) {
       this.status = 'paused';
       this.stopClock();
       this.emit('error', new Error('Audio playback stopped'));
@@ -550,6 +585,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
     }
 
     this.retrying = true;
+    this.startFailures++;
     try {
       const fallback = this.nextFallbackSpec();
       if (fallback) {
@@ -559,12 +595,16 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       }
 
       if (this.currentTarget && isStreamRef(this.currentTarget)) {
-        const fresh = await resolveAudioStreamUrl(this.currentTarget);
+        const fresh = await resolveAudioStreamUrl(this.currentTarget, true);
         if (sessionId !== this.playSessionId) return;
         this.currentStreamUrl = fresh;
         await this.spawnPlayer(fresh, this.currentMs, sessionId);
         return;
       }
+
+      this.status = 'paused';
+      this.stopClock();
+      this.emit('error', new Error('Audio playback stopped'));
     } catch (err: unknown) {
       this.status = 'paused';
       this.stopClock();
@@ -618,7 +658,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         if (sessionId !== this.playSessionId) return;
         if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
         try {
-          const fresh = await resolveAudioStreamUrl(this.currentTarget);
+          const fresh = await resolveAudioStreamUrl(this.currentTarget, true);
           if (sessionId !== this.playSessionId) return;
           this.currentStreamUrl = fresh;
           await this.spawnPlayer(fresh, this.currentMs, sessionId);
@@ -670,7 +710,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
         if (sessionId !== this.playSessionId) return;
         if (!this.currentTarget || !isStreamRef(this.currentTarget)) return;
         try {
-          const fresh = await resolveAudioStreamUrl(this.currentTarget);
+          const fresh = await resolveAudioStreamUrl(this.currentTarget, true);
           if (sessionId !== this.playSessionId) return;
           this.currentStreamUrl = fresh;
           await this.spawnPlayer(fresh, target, sessionId);
@@ -802,6 +842,7 @@ export class SystemAudioBackend extends EventEmitter implements IAudioBackend {
       this.lastTime = now;
       if (this.status === 'playing') {
         this.currentMs += elapsed * this.playbackSpeed;
+        if (this.currentMs - this.sessionStartMs >= START_FAILURE_THRESHOLD_MS) this.startFailures = 0;
 
         this.emit('status', {
           status: this.status,

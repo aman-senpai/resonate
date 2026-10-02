@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
+import { EventEmitter } from 'node:events';
 import { parseLrc, parseTimestampToMs, formatMsToTime, createSongFromText } from '../src/parser/lrc.js';
 import { LyricPlayer } from '../src/engine/player.js';
-import { atempoFilters, createAudioBackend, muxerEnabled, pickPlayerKind, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+import { atempoFilters, createAudioBackend, isFailedStart, muxerEnabled, pickPlayerKind, SimulatedAudioBackend, SystemAudioBackend } from '../src/engine/audioBackend.js';
+import type { IAudioBackend } from '../src/engine/audioBackend.js';
 
 
 import { AudioVisualizer } from '../src/engine/visualizer.js';
@@ -32,6 +34,44 @@ const globalSong = createSongFromText(
   'A Night at the Opera',
   355
 );
+
+// Test double recording the order of backend calls so track switching can be asserted without spawning audio.
+class RecordingBackend extends EventEmitter implements IAudioBackend {
+  readonly calls: string[] = [];
+  private readonly prepareGate = Promise.withResolvers<void>();
+
+  getName(): string {
+    return 'recording';
+  }
+  async prepare(url: string): Promise<void> {
+    this.calls.push(`prepare:${url}`);
+    await this.prepareGate.promise;
+  }
+  releasePrepare(): void {
+    this.prepareGate.resolve();
+  }
+  async play(url: string, startMs = 0): Promise<void> {
+    this.calls.push(`play:${url}@${startMs}`);
+    this.emit('status', { status: 'playing', currentMs: startMs, volume: 100 });
+  }
+  pause(): void {
+    this.calls.push('pause');
+  }
+  resume(): void {
+    this.calls.push('resume');
+  }
+  seek(targetMs: number): void {
+    this.calls.push(`seek:${targetMs}`);
+  }
+  setVolume(): void {}
+  setSpeed(): void {}
+  stop(): void {
+    this.calls.push('stop');
+  }
+  destroy(): void {
+    this.calls.push('destroy');
+  }
+}
 describe('LRC Parser & Time Formatting', () => {
   it('should parse timestamp string to milliseconds accurately', () => {
     assert.strictEqual(parseTimestampToMs('00:00.50'), 500);
@@ -121,6 +161,65 @@ describe('Lyric Player Engine', () => {
     assert.strictEqual(player.getState().loop, true);
 
     player.destroy();
+  });
+});
+
+describe('Song switching', () => {
+  const secondSong = createSongFromText(
+    'Second Song',
+    'Test Artist',
+    '[00:00.00] Hello\n[00:10.00] World',
+    'Test Album',
+    120
+  );
+  secondSong.id = 'bbbbbbbbbbb';
+
+  it('keeps the outgoing track playing while the next stream is prepared', async () => {
+    const backend = new RecordingBackend();
+    const player = new LyricPlayer(globalSong, backend);
+    await player.play();
+    backend.calls.length = 0;
+
+    const loading = player.loadSong(secondSong, true);
+
+    assert.ok(backend.calls.some((c) => c.startsWith('prepare:')), 'the incoming stream should be prepared first');
+    assert.ok(!backend.calls.includes('stop'), 'outgoing audio must not be torn down before the stream is ready');
+    assert.strictEqual(player.getState().isBuffering, true);
+    assert.strictEqual(player.getState().status, 'playing');
+
+    backend.releasePrepare();
+    await loading;
+
+    assert.ok(backend.calls.indexOf('stop') < backend.calls.findIndex((c) => c.startsWith('play:')), 'stop happens only right before the new spawn');
+    assert.ok(backend.calls.some((c) => c.startsWith('play:')), 'the new track should start playing');
+    assert.strictEqual(player.getState().isBuffering, false);
+    assert.strictEqual(player.getState().status, 'playing');
+    player.destroy();
+  });
+
+  it('advances instead of freezing when the backend reports the track ended early', async () => {
+    const backend = new RecordingBackend();
+    const player = new LyricPlayer(globalSong, backend);
+    await player.play();
+    let endedCount = 0;
+    player.on('ended', () => {
+      endedCount += 1;
+    });
+
+    backend.emit('ended');
+
+    assert.strictEqual(endedCount, 1);
+    assert.strictEqual(player.getState().status, 'ended');
+    player.destroy();
+  });
+
+  it('treats a clean exit without playback progress as a failed start', () => {
+    assert.strictEqual(isFailedStart(0, 0), true);
+    assert.strictEqual(isFailedStart(0, 1200), true);
+    assert.strictEqual(isFailedStart(0, 1500), false);
+    assert.strictEqual(isFailedStart(0, 60000), false);
+    assert.strictEqual(isFailedStart(1, 60000), true);
+    assert.strictEqual(isFailedStart(null, 0), true);
   });
 });
 
